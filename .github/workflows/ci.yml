@@ -30,6 +30,26 @@ jobs:
         working-directory: desktop/src-tauri
         run: cargo test
 
+  ai-helper:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/ai-helper
+      - name: Format
+        working-directory: desktop/ai-helper
+        run: cargo fmt --check
+      - name: Clippy
+        working-directory: desktop/ai-helper
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        working-directory: desktop/ai-helper
+        run: cargo test
+
   android:
     runs-on: ubuntu-latest
     steps:

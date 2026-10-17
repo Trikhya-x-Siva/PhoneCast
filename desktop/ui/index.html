@@ -178,6 +178,72 @@
         </div>
       </div>
 
+      <div id="aiCard" class="card ai-card">
+        <div class="card-head">
+          <h3>AI tools</h3>
+          <button id="aiPanelToggle" class="mini" title="Local, optional, CPU only. Runs as a separate program; off by default.">Off</button>
+        </div>
+        <label class="switch" title="Runs on this PC only, on the CPU, as a separate program. Nothing is sent anywhere except the chat connections you turn on.">
+          <input type="checkbox" id="aiEnabled"><span class="track"><span class="knob"></span></span>
+          Local AI helper <span id="aiProc" class="ai-proc">Off</span>
+        </label>
+        <div id="aiBody" class="ai-body off">
+          <details class="ai-sec" open>
+            <summary>Auto highlight clips <span id="aiClips"></span></summary>
+            <label class="switch"><input type="checkbox" id="aiHlEnabled"><span class="track"><span class="knob"></span></span>Spot exciting moments</label>
+            <div class="ai-score"><div id="aiScore"></div></div>
+            <label class="slider-label"><span>Sensitivity</span><output id="aiSensOut">Balanced</output></label>
+            <input id="aiSens" type="range" min="0" max="100" step="5" value="50">
+            <div class="row2">
+              <label class="field"><span>Clip length</span><select id="aiClipLen"><option value="15">15 s</option><option value="30" selected>30 s</option><option value="45">45 s</option><option value="60">60 s</option></select></label>
+              <label class="field"><span>Max per session</span><input id="aiMax" type="number" min="0" max="500" value="40"></label>
+            </div>
+            <label class="switch"><input type="checkbox" id="aiAsk" checked><span class="track"><span class="knob"></span></span>Ask before saving a clip</label>
+            <label class="switch" title="Downloads a 15 MB sound classifier (YAMNet) that recognises gunfire, cheering and laughter"><input type="checkbox" id="aiClassifier"><span class="track"><span class="knob"></span></span>Recognise sounds (15 MB download)</label>
+            <p class="hint">Watches game loudness, your voice and how fast chat moves. Clips come from the replay buffer and start ~25 s before the moment.</p>
+          </details>
+
+          <details class="ai-sec" open>
+            <summary>Chat</summary>
+            <label class="switch"><input type="checkbox" id="aiChatEnabled"><span class="track"><span class="knob"></span></span>Read chat</label>
+            <div class="ai-plat">
+              <label class="switch"><input type="checkbox" id="aiTwEnabled"><span class="track"><span class="knob"></span></span>Twitch</label>
+              <span id="aiTwState" class="ai-state">&mdash;</span>
+            </div>
+            <div class="key-row"><input id="aiTwClientId" type="text" spellcheck="false" placeholder="Client ID of your Twitch app"><button id="aiTwLogin" class="mini">Log in to Twitch</button></div>
+            <p class="hint">One-time setup: at <b>dev.twitch.tv/console/apps</b> register an app (category Chat Bot, client type <b>Public</b>, OAuth redirect <b>http://localhost</b>) and paste its Client ID. Login happens in your browser with a code; PhoneCast never sees your password.</p>
+            <div class="ai-plat">
+              <label class="switch"><input type="checkbox" id="aiYtEnabled"><span class="track"><span class="knob"></span></span>YouTube</label>
+              <span id="aiYtState" class="ai-state">&mdash;</span>
+            </div>
+            <div class="key-row"><input id="aiYtChannel" type="text" spellcheck="false" placeholder="@yourchannel"></div>
+            <label class="switch" title="A small window that stays above your game"><input type="checkbox" id="aiOverlay"><span class="track"><span class="knob"></span></span>Show chat above the game (overlay)</label>
+            <div class="ai-plat">
+              <label class="switch"><input type="checkbox" id="aiSpam" checked><span class="track"><span class="knob"></span></span>Flag spam</label>
+              <label class="switch"><input type="checkbox" id="aiSpamLinks" checked><span class="track"><span class="knob"></span></span>Links</label>
+              <label class="field inline"><span>Max/10 s</span><input id="aiSpamRate" type="number" min="1" max="60" value="5"></label>
+            </div>
+            <div class="ai-plat">
+              <label class="switch"><input type="checkbox" id="aiFaq" checked><span class="track"><span class="knob"></span></span>FAQ answers</label>
+              <span id="aiFaqInfo" class="ai-state"></span>
+            </div>
+            <label class="switch" title="Without this, every answer waits for you to click Post"><input type="checkbox" id="aiFaqAuto"><span class="track"><span class="knob"></span></span>Reply to <code>!ask</code> automatically (Twitch)</label>
+            <label class="switch" title="Downloads a 1.1 GB language model that runs on the CPU (max 4 threads)"><input type="checkbox" id="aiLlm"><span class="track"><span class="knob"></span></span>Reword answers with a local model (1.1 GB download)</label>
+            <div class="row"><button id="aiFaqOpen" class="mini">Edit answers (faq.yaml)</button><button id="aiFaqReload" class="mini">Reload FAQ</button><button id="aiModlogBtn" class="mini">Mod log</button></div>
+            <pre id="aiModlog" class="ai-modlog hidden"></pre>
+          </details>
+
+          <div class="ai-sec">
+            <summary>Downloads</summary>
+            <div id="aiModels" class="ai-models"></div>
+            <p class="hint">Models are fetched only when you switch a feature on, checked against a known SHA-256, and kept in %APPDATA%\PhoneCast\ai\models.</p>
+          </div>
+
+          <div id="aiSuggest" class="ai-suggest"></div>
+          <div id="aiChat" class="ai-chat"></div>
+        </div>
+      </div>
+
       <div class="card">
         <h3>Connection</h3>
         <dl>
@@ -259,5 +325,6 @@
 
   <div id="toast" class="toast"></div>
   <script src="app.js"></script>
+  <script src="ai.js"></script>
 </body>
 </html>

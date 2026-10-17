@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod adb;
+mod ai;
 mod audio;
 mod capture;
 mod core;
@@ -128,6 +129,66 @@ fn open_recordings() {
     std::process::Command::new("explorer").arg(dir).spawn().ok();
 }
 
+// ---------------- local AI helper (optional, separate process) ----------------
+
+type AiState<'a> = State<'a, Arc<ai::Ai>>;
+
+#[tauri::command]
+fn ai_get_settings(ai: AiState) -> Value {
+    ai.settings_json()
+}
+
+#[tauri::command]
+fn ai_save_settings(ai: AiState, settings: Value) -> Result<Value, String> {
+    ai.update_settings(settings)?;
+    Ok(ai.settings_json())
+}
+
+#[tauri::command]
+fn ai_get_status(ai: AiState) -> Value {
+    ai.status_json()
+}
+
+/// Forwards a message to the helper (download, twitchLogin, approve…).
+#[tauri::command]
+fn ai_send(ai: AiState, message: Value) -> bool {
+    ai.send(&message)
+}
+
+#[tauri::command]
+fn ai_set_overlay(ai: AiState, on: bool) -> Result<(), String> {
+    ai.set_overlay(on)
+}
+
+#[tauri::command]
+fn ai_open_faq(ai: AiState) {
+    let path = ai.status_json()["helper"]["faqPath"]
+        .as_str()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            let base = std::env::var("APPDATA")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            base.join("PhoneCast").join("ai").join("faq.yaml")
+        });
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d).ok();
+    }
+    std::process::Command::new("notepad").arg(path).spawn().ok();
+}
+
+/// Opens an https link in the default browser (Twitch login page).
+#[tauri::command]
+fn ai_open_url(url: String) -> bool {
+    if !url.starts_with("https://") || url.chars().any(|c| c.is_whitespace() || c == '"') {
+        return false;
+    }
+    std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .spawn()
+        .is_ok()
+}
+
 fn main() {
     diag::init();
     tauri::Builder::default()
@@ -138,12 +199,17 @@ fn main() {
                     core::PHONE_PORT
                 )
             })?;
+            let ai = ai::Ai::new(app.handle().clone(), core.mixer.clone());
             app.manage(core);
+            app.manage(ai);
             Ok(())
         })
         .on_window_event(|window, event| {
             // Finish the recording file cleanly when the app is closed.
             if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let Some(ai) = window.try_state::<Arc<ai::Ai>>() {
+                    ai.stop();
+                }
                 if let Some(core) = window.try_state::<Arc<Core>>() {
                     core.stop_live();
                     core.stop_recording().ok();
@@ -170,7 +236,14 @@ fn main() {
             set_source,
             get_log,
             open_logs,
-            open_recordings
+            open_recordings,
+            ai_get_settings,
+            ai_save_settings,
+            ai_get_status,
+            ai_send,
+            ai_set_overlay,
+            ai_open_faq,
+            ai_open_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running PhoneCast");

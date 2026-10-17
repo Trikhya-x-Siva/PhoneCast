@@ -5,6 +5,15 @@ versions follow [SemVer](https://semver.org).
 
 ## [Unreleased]
 ### Added
+- **Local AI tools (optional, off by default)** in a separate, crash-isolated
+  helper process (`phonecast-ai-helper`, CPU only): auto highlight clips
+  from game loudness, your voice and chat speed (with an optional 15 MB
+  YAMNet sound classifier); Twitch (EventSub, device-code login) and
+  YouTube live chat in the side panel and an always-on-top overlay; spam
+  flags (rate, near-duplicates, links, caps, emote walls) with a mod log;
+  FAQ answers from your own `faq.yaml`, posted only on `!ask` or after you
+  click Post, optionally reworded by a 1.1 GB local model. Models download
+  only when you switch them on and are SHA-256 checked; CPU/RAM use is shown.
 - **PC streaming**: capture a monitor on the GPU (Desktop Duplication →
   NVENC, zero-copy at native size), optional webcam picture-in-picture, PC
   sound in the mixer with Discord kept separate; record and go live from

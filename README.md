@@ -15,6 +15,9 @@ scrcpy + OBS for game streamers.
 - **Honest health display**: fps, delay, bitrate, dropped frames, phone
   temperature, and a diagnostics log that says *where* a stall happened.
 - ~5 MB installer, ~30 MB RAM. Nothing leaves your PC except the stream.
+- **Optional local AI tools** (off by default, CPU only, separate process):
+  auto highlight clips, Twitch/YouTube chat with spam flags and an in-game
+  overlay, FAQ replies you approve.
 
 > Status: early but usable. See [ROADMAP.md](ROADMAP.md) for what's next
 > and [CHANGELOG.md](CHANGELOG.md) for what changed.
@@ -57,6 +60,38 @@ Click **Go live**, paste your YouTube and/or Twitch stream key, pick a
 quality, **Start streaming**. The side panel shows each platform's status.
 The window shows the upload speed you need; run a speed test first.
 
+### AI tools (optional)
+Everything here is off until you switch it on, runs on the CPU in a separate
+program (`phonecast-ai-helper.exe`) that is killed when you switch it off,
+and sends nothing anywhere except the chat connections you enable. CPU and
+RAM use are shown next to the switch.
+
+- **Auto highlight clips** watch game loudness, your voice and how fast chat
+  moves. When that spikes, PhoneCast asks "Highlight?" (or saves straight
+  away if you turn *Ask before saving* off) and keeps a clip from the replay
+  buffer that starts ~25 s before the moment. **Sensitivity** and **Clip
+  length** are yours to tune; **Recognise sounds** adds a 15 MB sound
+  classifier (YAMNet) for gunfire, cheering and laughter.
+- **Chat** shows Twitch and YouTube chat in the side panel and, with
+  *overlay* on, in a small window that stays above your game. Spam is
+  flagged, not deleted: too many messages, copy-pasted text, links, all-caps
+  and emote walls are greyed out and written to the mod log.
+  - *Twitch*: one-time setup at **dev.twitch.tv/console/apps**: register an
+    app (category Chat Bot, client type **Public**, redirect
+    `http://localhost`) and paste its Client ID. Login happens in your
+    browser with a code; PhoneCast never sees your password.
+  - *YouTube*: type your channel handle (`@name`). Reading works without any
+    login; posting replies on YouTube is not possible without a Google
+    developer account, so answers for YouTube viewers are shown for you to
+    paste.
+- **FAQ answers** come from `%APPDATA%\PhoneCast\ai\faq.yaml` (click *Edit
+  answers*). A reply is only ever posted when a viewer types `!ask ...` **and**
+  you turned on auto-reply, or when you click **Post** on a suggestion.
+  *Reword answers with a local model* downloads Qwen3-1.7B (1.1 GB, 4-bit)
+  and runs it on at most 4 CPU threads.
+- Model downloads happen only when you switch a feature on, show their size
+  first, and are verified against a known SHA-256.
+
 ## Troubleshooting
 | Problem | Fix |
 |---|---|
@@ -72,6 +107,11 @@ The window shows the upload speed you need; run a speed test first.
   ```
   cd desktop && npm install && pwsh ./fetch-adb.ps1 && npx tauri build
   ```
+- **AI helper** (optional): `cd desktop/ai-helper && cargo build --release`.
+  The release workflow bundles it next to the app; in development the app
+  finds it in `desktop/ai-helper/target/{debug,release}`. The sound
+  classifier and local model need the `yamnet` / `llm` cargo features
+  (`--features yamnet,llm`; the latter needs CMake and a C++ toolchain).
 - **Phone app:** JDK 17 + Android SDK. `android\build-and-install.bat`.
 - Details in [CONTRIBUTING.md](CONTRIBUTING.md). Protocol between phone and
   PC: [PROTOCOL.md](PROTOCOL.md).

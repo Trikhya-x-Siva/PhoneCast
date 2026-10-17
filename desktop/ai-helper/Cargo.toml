@@ -1,0 +1,47 @@
+[package]
+name = "phonecast-ai-helper"
+version = "0.1.0"
+description = "PhoneCast local AI helper: highlight detection and chat tools, CPU only, in its own process"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "phonecast-ai-helper"
+path = "src/main.rs"
+
+[features]
+default = []
+# Optional YAMNet audio classifier (ONNX Runtime, CPU). Adds ~15 MB to the
+# binary's dependencies; the model itself is downloaded on enable.
+yamnet = ["dep:ort"]
+# Optional local LLM rephrasing of FAQ answers (llama.cpp, CPU). Needs cmake
+# and a C++ toolchain to build.
+llm = ["dep:llama-cpp-2"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+ureq = { version = "2", features = ["json"] }
+tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+sha2 = "0.10"
+base64 = "0.22"
+ort = { version = "=2.0.0-rc.10", optional = true }
+llama-cpp-2 = { version = "0.1", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security_Cryptography",
+  "Win32_System_Threading",
+  "Win32_System_ProcessStatus",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

@@ -72,14 +72,17 @@ The most-requested capture features, built on GPU-only paths:
 ## v0.4 — lightweight local AI (optional, off by default)
 All of it runs on the CPU as a separate, crash-isolated helper process, so
 the game and encoder keep the GPU. Everything can be disabled.
-- **Auto highlight clips**: fuse game-audio loudness, mic excitement and chat
-  message rate into a score; save a clip from the replay buffer when it
-  spikes. Optional small audio classifier (YAMNet, ~4 MB) to recognise
-  gunfire/cheers/laughter, and optional kill-feed OCR per game.
-- **Chat helper**: read YouTube and Twitch chat (EventSub / live chat
-  stream), show it in-app and as an in-game overlay, filter spam with
-  simple rules (rate limits, near-duplicates, link filters), and answer a
-  streamer-defined FAQ list — optionally rephrased by a ~1 GB local model.
+- **Auto highlight clips** *(first version shipped)*: fuse game-audio
+  loudness, mic excitement and chat message rate into a score; save a clip
+  from the replay buffer when it spikes. Optional small audio classifier
+  (YAMNet ONNX, ~15 MB) recognises gunfire/cheers/laughter. Still to do:
+  optional kill-feed OCR per game, tuning from real streams.
+- **Chat helper** *(first version shipped)*: read YouTube and Twitch chat
+  (EventSub / live chat stream), show it in-app and as an in-game overlay,
+  filter spam with simple rules (rate limits, near-duplicates, link
+  filters), and answer a streamer-defined FAQ list — optionally rephrased
+  by a ~1 GB local model. Still to do: posting replies on YouTube (needs a
+  Google OAuth client), emote images in the overlay.
 - **Live captions** (later): streaming speech-to-text on CPU (Moonshine via
   sherpa-onnx), ~0.5 s delay, as an overlay.
 - **Better noise suppression**: DeepFilterNet as a "high quality" option next

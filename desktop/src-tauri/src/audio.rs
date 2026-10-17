@@ -133,6 +133,21 @@ struct State {
     duck: f32,
     limiter: f32,
     last_game_audio: Option<Instant>,
+    /// Optional tap for the local AI helper: peak levels since the last
+    /// take and, when `ai_pcm` is on, the mix as 16 kHz mono.
+    ai_tap: AiTap,
+}
+
+#[derive(Default)]
+struct AiTap {
+    on: bool,
+    pcm_on: bool,
+    game_peak: f32,
+    mic_peak: f32,
+    pcm: Vec<u8>,
+    /// Sample position within the current 3-sample decimation group.
+    phase: u8,
+    acc: f32,
 }
 
 pub struct Mixer {
@@ -160,6 +175,7 @@ impl Mixer {
                 duck: 1.0,
                 limiter: 1.0,
                 last_game_audio: None,
+                ai_tap: AiTap::default(),
             }),
         });
         #[cfg(windows)]
@@ -244,6 +260,10 @@ impl Mixer {
         s.game.peak = s.game.peak.max(pg);
         s.discord.peak = s.discord.peak.max(pd);
         s.mic.peak = s.mic.peak.max(pm);
+        if s.ai_tap.on {
+            s.ai_tap.game_peak = s.ai_tap.game_peak.max(pg);
+            s.ai_tap.mic_peak = s.ai_tap.mic_peak.max(pm);
+        }
 
         // Ducking: game drops 8 dB while you or a teammate talk.
         let target = if s.ducking && (pd > 0.03 || pm > 0.03) {
@@ -256,8 +276,21 @@ impl Mixer {
 
         let mut out = Vec::with_capacity(n * 2);
         let mut lim = s.limiter;
+        let tap_pcm = s.ai_tap.on && s.ai_tap.pcm_on;
         for i in 0..n {
             let x = game[i] * gg + discord[i] * gd + mic[i] * gm;
+            if tap_pcm {
+                // 48 kHz stereo → 16 kHz mono: average 3 frames (6 samples).
+                let t = &mut s.ai_tap;
+                t.acc += x;
+                t.phase += 1;
+                if t.phase == 6 {
+                    let v = (t.acc / 6.0 * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                    t.pcm.extend_from_slice(&v.to_le_bytes());
+                    t.acc = 0.0;
+                    t.phase = 0;
+                }
+            }
             // Peak limiter: instant attack, ~0.5 s release. Never clips.
             if x.abs() * lim > 0.97 {
                 lim = 0.97 / x.abs();
@@ -316,6 +349,38 @@ impl Mixer {
         s.discord.peak = 0.0;
         s.mic.peak = 0.0;
         v
+    }
+
+    /// Local AI helper tap. `pcm` also collects the mix as 16 kHz mono for
+    /// the sound classifier (about 32 KB/s; nothing is kept beyond 2 s).
+    pub fn set_ai_tap(&self, on: bool, pcm: bool) {
+        let mut s = self.state.lock().unwrap();
+        s.ai_tap.on = on;
+        s.ai_tap.pcm_on = on && pcm;
+        s.ai_tap.pcm.clear();
+        s.ai_tap.phase = 0;
+        s.ai_tap.acc = 0.0;
+    }
+
+    /// Peak levels (dBFS, game and mic) since the last call plus the PCM
+    /// collected meanwhile; None while the tap is off.
+    pub fn take_ai_tap(&self) -> Option<(f64, f64, Option<Vec<u8>>)> {
+        let mut s = self.state.lock().unwrap();
+        if !s.ai_tap.on {
+            return None;
+        }
+        let t = &mut s.ai_tap;
+        let out = (
+            db(t.game_peak),
+            db(t.mic_peak),
+            t.pcm_on.then(|| std::mem::take(&mut t.pcm)),
+        );
+        t.game_peak = 0.0;
+        t.mic_peak = 0.0;
+        if t.pcm.len() > 64_000 {
+            t.pcm.clear();
+        }
+        Some(out)
     }
 
     /// Settings and state for the UI.

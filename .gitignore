@@ -1,5 +1,6 @@
 # Build output
 desktop/src-tauri/target/
+desktop/ai-helper/target/
 desktop/src-tauri/gen/
 desktop/node_modules/
 android/.gradle/

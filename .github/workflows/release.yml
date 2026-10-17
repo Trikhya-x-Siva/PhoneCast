@@ -32,6 +32,9 @@ jobs:
       - name: Tests
         working-directory: desktop/src-tauri
         run: cargo test
+      - name: Build the local AI helper (separate process, bundled next to the app)
+        working-directory: desktop/ai-helper
+        run: cargo build --release
       - name: Build and attach to release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -41,7 +44,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "PhoneCast ${{ github.ref_name }}"
           releaseDraft: true
-          args: --bundles nsis
+          args: --bundles nsis --config src-tauri/tauri.release.json
 
   android:
     name: Android APK
