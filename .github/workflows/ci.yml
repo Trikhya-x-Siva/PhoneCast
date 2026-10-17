@@ -17,6 +17,9 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
+      - name: Bundle adb (declared as a resource, so the build script needs it)
+        shell: pwsh
+        run: ./desktop/fetch-adb.ps1
       - name: Format
         working-directory: desktop/src-tauri
         run: cargo fmt --check
@@ -35,7 +38,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - uses: android-actions/setup-android@v3
+      # The Ubuntu runner ships an Android SDK; Gradle downloads the exact
+      # platform/build-tools once the licences are accepted.
+      - name: Accept Android SDK licences
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - uses: gradle/actions/setup-gradle@v4
       - working-directory: android
         run: chmod +x gradlew && ./gradlew :app:assembleRelease --no-daemon
