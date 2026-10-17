@@ -175,8 +175,10 @@ impl Mixer {
     /// mic. Returns the mixed chunk as s16le stereo, same length.
     pub fn mix_game(&self, pcm: &[u8]) -> Vec<u8> {
         let game: Vec<f32> = pcm
-            .chunks_exact(2)
-            .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| i16::from_le_bytes(*b) as f32 / 32768.0)
             .collect();
         let mut s = self.state.lock().unwrap();
         s.last_game_audio = Some(Instant::now());
@@ -554,11 +556,9 @@ mod capture {
             return;
         };
         let mut list = Vec::new();
-        for d in &col {
-            if let Ok(d) = d {
-                if let (Ok(id), Ok(name)) = (d.get_id(), d.get_friendlyname()) {
-                    list.push((id, name));
-                }
+        for d in (&col).into_iter().flatten() {
+            if let (Ok(id), Ok(name)) = (d.get_id(), d.get_friendlyname()) {
+                list.push((id, name));
             }
         }
         mixer.with(|s| s.mic_devices = list);

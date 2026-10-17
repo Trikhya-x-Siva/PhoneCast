@@ -245,7 +245,7 @@ impl Core {
                         pc.output,
                         pc.screen_w,
                         pc.screen_h,
-                        pc.webcam.as_ref().map_or(false, |w| w.enabled)
+                        pc.webcam.as_ref().is_some_and(|w| w.enabled)
                     ),
                 );
                 self.mixer.set_pc_audio(true);
@@ -451,7 +451,7 @@ impl Core {
         let still_active = phone
             .as_ref()
             .and_then(|s| s.peer_addr().ok())
-            .map_or(true, |a| a.ip().to_string() == remote);
+            .is_none_or(|a| a.ip().to_string() == remote);
         if still_active {
             *phone = None;
             drop(phone);

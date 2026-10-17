@@ -134,7 +134,7 @@ pub fn spawn_recorder(
         .ok();
 }
 
-fn part_path(first: &PathBuf, part: u32) -> PathBuf {
+fn part_path(first: &std::path::Path, part: u32) -> PathBuf {
     let stem = first.file_stem().unwrap_or_default().to_string_lossy();
     first.with_file_name(format!("{stem}_part{part}.mkv"))
 }

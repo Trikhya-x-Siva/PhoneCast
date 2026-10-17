@@ -20,18 +20,12 @@ use std::os::windows::process::CommandExt;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 #[serde(tag = "kind", rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Source {
+    #[default]
     Phone,
     /// A monitor, by ddagrab output index (DXGI order on the main adapter).
-    Screen {
-        output: usize,
-    },
-}
-
-impl Default for Source {
-    fn default() -> Self {
-        Source::Phone
-    }
+    Screen { output: usize },
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
@@ -340,10 +334,7 @@ impl ScreenPreview {
             }
             buf.extend_from_slice(&chunk[..n]);
             // Emit each access unit (AUD-delimited) once the next AUD has arrived.
-            loop {
-                let Some(second) = find_aud(&buf, 1) else {
-                    break;
-                };
+            while let Some(second) = find_aud(&buf, 1) {
                 let au: Vec<u8> = buf.drain(..second).collect();
                 let mut key = false;
                 let mut ps = Vec::new();
