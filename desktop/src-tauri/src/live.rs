@@ -7,6 +7,7 @@
 //! Destinations are independent: if one drops, it reconnects on its own and
 //! the other keeps going.
 
+use crate::adapt::{mbps_text, Adapt, Change};
 use crate::capture::PcVideo;
 use crate::mkv::{MkvWriter, VideoConfig};
 use crate::sinks::{Media, Push, SinkTx};
@@ -318,6 +319,39 @@ pub struct DestStatus {
     pub seconds: u64,
     pub reconnects: u32,
     pub quality: String,
+    /// Bitrate the encoder is set to right now (dynamic bitrate may lower it).
+    #[serde(rename = "kbpsNow")]
+    pub kbps_now: u32,
+    /// Bitrate of the chosen quality.
+    #[serde(rename = "kbpsBase")]
+    pub kbps_base: u32,
+    /// "good" or "reduced" (running below the chosen quality).
+    pub health: &'static str,
+    /// Plain-language note about the upload, shown in the Live card.
+    pub note: Option<String>,
+}
+
+impl DestStatus {
+    fn new(id: &'static str, name: &'static str, quality: String, kbps: u32) -> Self {
+        Self {
+            id,
+            name,
+            state: "connecting".into(),
+            fps: 0.0,
+            kbps: 0.0,
+            dropped: 0,
+            speed: 0.0,
+            error: None,
+            since: None,
+            seconds: 0,
+            reconnects: 0,
+            quality,
+            kbps_now: kbps,
+            kbps_base: kbps,
+            health: "good",
+            note: None,
+        }
+    }
 }
 
 pub struct Dest {
@@ -489,20 +523,7 @@ impl Live {
 
         let mut dests = self.dests.lock().unwrap();
         for (id, name, p, url) in plans {
-            let status = Arc::new(Mutex::new(DestStatus {
-                id,
-                name,
-                state: "connecting".into(),
-                fps: 0.0,
-                kbps: 0.0,
-                dropped: 0,
-                speed: 0.0,
-                error: None,
-                since: None,
-                seconds: 0,
-                reconnects: 0,
-                quality: p.id.into(),
-            }));
+            let status = Arc::new(Mutex::new(DestStatus::new(id, name, p.id.into(), p.kbps)));
             let stop = Arc::new(AtomicBool::new(false));
             // ~15 s of buffer (video + 10 ms audio packets): rides out upload and
             // CPU hiccups instead of skipping ahead; adds no delay when all is well.
@@ -628,20 +649,12 @@ pub fn spawn_job(
     request_key: Arc<dyn Fn() + Send + Sync>,
     name: &'static str,
 ) -> Dest {
-    let status = Arc::new(Mutex::new(DestStatus {
-        id: name,
+    let status = Arc::new(Mutex::new(DestStatus::new(
         name,
-        state: "connecting".into(),
-        fps: 0.0,
-        kbps: 0.0,
-        dropped: 0,
-        speed: 0.0,
-        error: None,
-        since: None,
-        seconds: 0,
-        reconnects: 0,
-        quality: format!("{}p", job.h),
-    }));
+        name,
+        format!("{}p", job.h),
+        job.kbps,
+    )));
     let stop = Arc::new(AtomicBool::new(false));
     let (tx, rx) = SinkTx::new(2400);
     let (st, sp) = (status.clone(), stop.clone());
@@ -653,9 +666,11 @@ pub fn spawn_job(
 }
 
 impl Job {
-    fn args(&self) -> Vec<String> {
+    /// FFmpeg arguments for this job at `kbps` (the chosen quality's bitrate,
+    /// or a lower one while dynamic bitrate is active).
+    fn args(&self, kbps: u32) -> Vec<String> {
         if let Some(pc) = &self.pc {
-            return self.pc_args(pc);
+            return self.pc_args(pc, kbps);
         }
         let (w, h) = (self.w, self.h);
         let nvidia = self.encoder.contains("nvenc");
@@ -701,14 +716,14 @@ impl Job {
             "-map".into(),
             "0:a:0".into(),
         ]);
-        a.extend(encoder_args(&self.encoder, self.kbps, self.hevc, w >= 3840));
+        a.extend(encoder_args(&self.encoder, kbps, self.hevc, w >= 3840));
         a.extend(self.output_args());
         a
     }
 
     /// PC screen mode: FFmpeg captures the monitor (and webcam) itself;
     /// the mixed audio arrives as raw PCM on stdin.
-    fn pc_args(&self, pc: &PcVideo) -> Vec<String> {
+    fn pc_args(&self, pc: &PcVideo, kbps: u32) -> Vec<String> {
         let mut a: Vec<String> = [
             "-hide_banner",
             "-y",
@@ -762,12 +777,7 @@ impl Job {
                 );
             }
         } else {
-            a.extend(encoder_args(
-                &self.encoder,
-                self.kbps,
-                self.hevc,
-                self.w >= 3840,
-            ));
+            a.extend(encoder_args(&self.encoder, kbps, self.hevc, self.w >= 3840));
         }
         a.extend(self.output_args());
         a
@@ -805,9 +815,9 @@ impl Job {
         a
     }
 
-    fn spawn(&self) -> std::io::Result<Child> {
+    fn spawn(&self, kbps: u32) -> std::io::Result<Child> {
         let mut cmd = Command::new(&self.ffmpeg);
-        cmd.args(self.args())
+        cmd.args(self.args(kbps))
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -836,9 +846,14 @@ impl Job {
                 self.w, self.h, self.kbps, self.encoder
             ),
         );
+        // Dynamic bitrate: live outputs only (a recording has no upload).
+        let adaptive = !self.file && self.kbps > 0;
+        let mut adapt = Adapt::new(self.kbps);
+        let mut adjusting = false;
         let mut attempt = 0u32;
         'outer: while !stop.load(Ordering::SeqCst) {
-            let mut child = match self.spawn() {
+            let kbps = adapt.kbps();
+            let mut child = match self.spawn(kbps) {
                 Ok(c) => c,
                 Err(e) => {
                     set(&|s| {
@@ -848,13 +863,18 @@ impl Job {
                     return;
                 }
             };
+            adapt.restarted(Instant::now());
             set(&|s| {
-                s.state = if attempt == 0 {
+                s.kbps_now = kbps;
+                s.state = if adjusting {
+                    "adjusting".into()
+                } else if attempt == 0 {
                     "connecting".into()
                 } else {
                     "reconnecting".into()
                 };
             });
+            adjusting = false;
             watch_progress(child.stderr.take().unwrap(), status.clone());
             let stdin = BufWriter::with_capacity(1 << 20, child.stdin.take().unwrap());
             let mut writer = if self.pc.is_some() {
@@ -867,11 +887,51 @@ impl Job {
             };
             request_key();
             let mut restart_for_config = false;
+            let mut restart_for_bitrate = false;
             let mut sender_gone = false;
+            let mut last_check = Instant::now();
 
             while let Some(w) = writer.as_mut() {
                 if stop.load(Ordering::SeqCst) {
                     break;
+                }
+                // Upload health, twice a second: step the bitrate down when the
+                // upload struggles, back up once it has been smooth for a minute.
+                if adaptive && last_check.elapsed() >= Duration::from_millis(500) {
+                    let now = Instant::now();
+                    last_check = now;
+                    let (speed, dropped, on_air) = {
+                        let s = status.lock().unwrap();
+                        (s.speed, s.dropped, s.state == "live")
+                    };
+                    if on_air {
+                        if let Some(change) = adapt.observe(speed, dropped, now) {
+                            let (note, msg) = match change {
+                                Change::Down(k) => (
+                                    format!("Upload struggling → lowered to {}", mbps_text(k)),
+                                    format!(
+                                        "{name}: upload struggling (speed {speed:.2}x, {dropped} dropped) - lowering {kbps} → {k} kbps"
+                                    ),
+                                ),
+                                Change::Up(k) if adapt.reduced() => (
+                                    format!("Upload recovering → raised to {}", mbps_text(k)),
+                                    format!("{name}: upload stable for 60 s - raising {kbps} → {k} kbps"),
+                                ),
+                                Change::Up(k) => (
+                                    "Upload recovered → back to full quality".to_string(),
+                                    format!("{name}: upload stable for 60 s - back to {k} kbps"),
+                                ),
+                            };
+                            crate::diag::log("live", msg);
+                            let reduced = adapt.reduced();
+                            set(&|s| {
+                                s.note = Some(note.clone());
+                                s.health = if reduced { "reduced" } else { "good" };
+                            });
+                            restart_for_bitrate = true;
+                            break;
+                        }
+                    }
                 }
                 let m = match rx.recv_timeout(Duration::from_millis(500)) {
                     Ok(m) => m,
@@ -917,6 +977,13 @@ impl Job {
             }
             if restart_for_config {
                 attempt += 1;
+                continue;
+            }
+            if restart_for_bitrate {
+                // Same connection settings, new bitrate; the other destination
+                // is untouched. Starts again on the next keyframe.
+                adjusting = true;
+                set(&|s| s.state = "adjusting".into());
                 continue;
             }
             // FFmpeg exited: network drop or platform rejected the stream.
@@ -1226,20 +1293,12 @@ mod tests {
                 height: 720,
                 csd: csd.clone(),
             };
-            let status = Arc::new(Mutex::new(DestStatus {
-                id: "test",
-                name: "Test",
-                state: "connecting".into(),
-                fps: 0.0,
-                kbps: 0.0,
-                dropped: 0,
-                speed: 0.0,
-                error: None,
-                since: None,
-                seconds: 0,
-                reconnects: 0,
-                quality: "1440p60".into(),
-            }));
+            let status = Arc::new(Mutex::new(DestStatus::new(
+                "test",
+                "Test",
+                "1440p60".into(),
+                24_000,
+            )));
             let stop = Arc::new(AtomicBool::new(false));
             let (mut tx, rx) = SinkTx::new(800);
             let (st, sp) = (status.clone(), stop.clone());

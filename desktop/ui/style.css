@@ -141,6 +141,8 @@ canvas#video { max-width: 100%; max-height: 100%; display: block; opacity: 0; tr
 .strip.talking { border-color: color-mix(in srgb, var(--c) 55%, transparent); }
 .strip[data-src=game] { --c: var(--game); } .strip[data-src=discord] { --c: var(--discord); } .strip[data-src=mic] { --c: var(--mic); }
 .strip.inactive .names b { color: var(--muted); }
+.strip.missing { border-color: rgba(255,193,77,.5); }
+.strip.missing .status { color: var(--warn); white-space: normal; }
 .strip-top { display: flex; align-items: center; gap: 10px; }
 .icon { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; color: #fff; background: var(--c); box-shadow: 0 4px 14px color-mix(in srgb, var(--c) 40%, transparent); flex: none; transition: transform .25s var(--ease); }
 .strip.talking .icon { transform: scale(1.08); }
@@ -275,6 +277,29 @@ dd { margin: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; wh
 .upload span { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .upload small { color: var(--muted); font-size: 12px; }
 .fine { color: var(--muted); font-size: 11.5px; margin: 10px 0 0; text-align: center; }
+
+/* ---------------- clips, hotkeys, upload health ---------------- */
+.icon-only { padding: 9px 11px; }
+.clip-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.clip-row .clip { flex-direction: column; gap: 2px; padding: 9px 6px; }
+.clip-row .clip small { color: var(--muted); font-size: 10.5px; font-weight: 500; letter-spacing: .02em; }
+.warn-box.small { font-size: 12px; line-height: 1.5; margin: 12px 0 0; }
+.warn-box.small p { margin: 0; } .warn-box.small p + p { margin-top: 6px; }
+.ldest .note { grid-column: 2 / 4; font-size: 12px; line-height: 1.4; }
+.ldest .note.reduced { color: var(--warn); } .ldest .note.good { color: var(--good); }
+.state.adjusting { background: rgba(255,193,77,.15); color: var(--warn); }
+.state.adjusting::after { content: "…"; animation: blink 1s infinite; }
+.sheet.narrow { width: min(540px, calc(100vw - 32px)); }
+.hotkey-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.hk { display: grid; grid-template-columns: 1fr 190px 34px; gap: 10px; align-items: center; }
+.hk label { color: var(--text); font-size: 13.5px; }
+.hk input { width: 100%; padding: 9px 12px; border-radius: 10px; background: rgba(0,0,0,.3); border: 1px solid var(--line); color: var(--text); font: 13px "Cascadia Mono", Consolas, monospace; text-align: center; outline: none; cursor: pointer; transition: border-color .2s, box-shadow .2s; }
+.hk input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(139,108,255,.2); }
+.hk input.bad { border-color: var(--bad); }
+.hk .problem { grid-column: 1 / 4; color: var(--bad); font-size: 12px; margin-top: -4px; }
+.hk .clear { width: 34px; height: 34px; border-radius: 9px; color: var(--muted); display: grid; place-items: center; }
+.hk .clear:hover { background: rgba(255,255,255,.08); color: var(--text); }
+.hk .clear svg { width: 15px; height: 15px; }
 
 .toast {
   position: fixed; bottom: 22px; left: 50%; transform: translate(-50%, 24px) scale(.96); opacity: 0;

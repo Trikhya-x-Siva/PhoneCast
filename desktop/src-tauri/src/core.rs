@@ -9,8 +9,11 @@ use crate::adb::{self, AdbState};
 use crate::audio::{self, Mixer};
 use crate::capture::{PcVideo, ScreenPreview, Source, SourceSettings};
 use crate::diag;
+use crate::hotkeys::{Action, Bindings, Hotkeys};
 use crate::live::{self, Live};
 use crate::mkv::VideoConfig;
+use crate::prefs::{Device, Prefs};
+use crate::replay::{self, ReplayBuffer};
 use crate::sinks::{self, Media, Push, RecorderInfo, SinkTx};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -95,6 +98,7 @@ struct PreviewClient {
 
 pub struct Core {
     start: Instant,
+    app: AppHandle,
     inner: Mutex<Inner>,
     phone: Mutex<Option<TcpStream>>,
     preview: Mutex<Vec<PreviewClient>>,
@@ -106,24 +110,56 @@ pub struct Core {
     screen_preview: Mutex<Option<ScreenPreview>>,
     pc_record: Mutex<Option<PcRecord>>,
     sources_cache: Mutex<Value>,
+    /// Last N seconds of the active source, for instant clips.
+    replay: Mutex<ReplayBuffer>,
+    prefs: Mutex<Prefs>,
+    hotkeys: Mutex<Option<Arc<Hotkeys>>>,
+    /// Plain-language warnings about chosen devices that are not connected.
+    device_warnings: Mutex<Vec<String>>,
 }
 
 impl Core {
     pub fn start(app: AppHandle) -> std::io::Result<Arc<Core>> {
+        let prefs = Prefs::load();
+        let mixer = Mixer::start();
+        // Devices by stable ID: the same mic and voice app as last time, or a
+        // warning if the mic is gone (never a silent switch to another one).
+        if let Some(d) = &prefs.mic {
+            mixer.set_mic_device(Some(d.id.clone()), Some(d.name.clone()));
+        }
+        mixer.set_voice_app(&prefs.voice_app);
         let core = Arc::new(Core {
             start: Instant::now(),
+            app: app.clone(),
             inner: Mutex::new(Inner::default()),
             phone: Mutex::new(None),
             preview: Mutex::new(Vec::new()),
             adb: Arc::new(Mutex::new(AdbState::default())),
-            mixer: Mixer::start(),
+            mixer,
             live: Live::new(),
             preview_port: Mutex::new(0),
             source: Mutex::new(SourceSettings::load()),
             screen_preview: Mutex::new(None),
             pc_record: Mutex::new(None),
             sources_cache: Mutex::new(Value::Null),
+            replay: Mutex::new(ReplayBuffer::new(prefs.replay_seconds)),
+            prefs: Mutex::new(prefs),
+            hotkeys: Mutex::new(None),
+            device_warnings: Mutex::new(Vec::new()),
         });
+
+        // Global hotkeys (work while the game has focus).
+        let weak = Arc::downgrade(&core);
+        let bindings = core.prefs.lock().unwrap().hotkeys.clone();
+        let hk = Hotkeys::start(
+            &bindings,
+            Arc::new(move |a: Action| {
+                if let Some(c) = weak.upgrade() {
+                    c.hotkey(a);
+                }
+            }),
+        );
+        *core.hotkeys.lock().unwrap() = Some(hk);
 
         // Listen on all interfaces: 127.0.0.1 for USB (adb reverse), LAN for Wi-Fi.
         let listener = TcpListener::bind(("0.0.0.0", PHONE_PORT))?;
@@ -217,17 +253,48 @@ impl Core {
     /// The PC screen + webcam description for FFmpeg, if the source is a screen.
     fn pc_video(&self) -> Option<Arc<PcVideo>> {
         let s = self.source.lock().unwrap();
-        let Source::Screen { output } = s.source else {
+        let Source::Screen { output, ref id } = s.source else {
             return None;
         };
+        let mut warnings = Vec::new();
         let monitors = crate::capture::monitors();
-        let m = monitors
-            .iter()
-            .find(|m| m.output == output)
-            .or(monitors.first())?;
+        // By stable hardware ID first; settings saved before IDs existed
+        // only have the index. A missing monitor is reported, never replaced.
+        let m = if id.is_empty() {
+            monitors.iter().find(|m| m.output == output)
+        } else {
+            monitors.iter().find(|m| m.id == *id)
+        };
+        let Some(m) = m else {
+            warnings.push(format!(
+                "Your chosen monitor ({}) isn't connected. PhoneCast is waiting for it and won't switch to another screen by itself — pick one under Source if you want to.",
+                if id.is_empty() {
+                    format!("screen {}", output + 1)
+                } else {
+                    id.clone()
+                }
+            ));
+            *self.device_warnings.lock().unwrap() = warnings;
+            return None;
+        };
+        let mut webcam = s.webcam.clone();
+        if webcam.enabled && !webcam.device.is_empty() {
+            let known = self.sources_cache.lock().unwrap();
+            let list = known.get("webcams").and_then(Value::as_array);
+            let present =
+                |l: &Vec<Value>| l.iter().any(|w| w.as_str() == Some(webcam.device.as_str()));
+            if list.is_some_and(|l| !present(l)) {
+                warnings.push(format!(
+                    "Webcam \"{}\" isn't connected — streaming without it until it's back.",
+                    webcam.device
+                ));
+                webcam.enabled = false;
+            }
+        }
+        *self.device_warnings.lock().unwrap() = warnings;
         Some(Arc::new(PcVideo {
             output: m.output,
-            webcam: Some(s.webcam.clone()),
+            webcam: Some(webcam),
             screen_w: m.width,
             screen_h: m.height,
         }))
@@ -236,7 +303,17 @@ impl Core {
     fn apply_source(self: &Arc<Self>) {
         // Stop any running screen preview first.
         *self.screen_preview.lock().unwrap() = None;
-        match self.pc_video() {
+        let pc = self.pc_video();
+        if pc.is_none() && self.is_pc_mode() {
+            // The chosen monitor is unplugged: wait for it and say so, rather
+            // than quietly showing another screen or the phone.
+            for w in self.device_warnings.lock().unwrap().iter() {
+                diag::log("source", w);
+            }
+            self.mixer.set_pc_audio(true);
+            return;
+        }
+        match pc {
             Some(pc) => {
                 diag::log(
                     "source",
@@ -263,6 +340,7 @@ impl Core {
                         screen_w: pc.screen_w,
                         screen_h: pc.screen_h,
                     },
+                    self.start,
                     Arc::new(move |cfg: VideoConfig| {
                         if let Some(c) = weak_a.upgrade() {
                             c.inner.lock().unwrap().video = Some(cfg.clone());
@@ -295,6 +373,7 @@ impl Core {
             }
             None => {
                 diag::log("source", "phone");
+                self.device_warnings.lock().unwrap().clear();
                 self.mixer.set_pc_audio(false);
                 let mut i = self.inner.lock().unwrap();
                 i.video = i.phone_video.clone();
@@ -320,6 +399,11 @@ impl Core {
     }
 
     fn has_outputs(&self) -> bool {
+        self.has_outputs_running() || self.replay.lock().unwrap().enabled()
+    }
+
+    /// Recording or streaming right now (a source change would cut them).
+    fn has_outputs_running(&self) -> bool {
         self.inner.lock().unwrap().recording.is_some()
             || self.pc_record.lock().unwrap().is_some()
             || self.live.is_live()
@@ -584,6 +668,7 @@ impl Core {
 
     /// Hands media to the recorder and live streams (never blocks).
     fn dispatch(&self, m: Media) {
+        self.replay.lock().unwrap().push(&m);
         let mut want_key = false;
         {
             let mut i = self.inner.lock().unwrap();
@@ -857,11 +942,27 @@ impl Core {
 
     // ---------------- 2 Hz housekeeping ----------------
 
-    fn ticker(&self, app: AppHandle) {
+    fn ticker(self: &Arc<Self>, app: AppHandle) {
         let mut last = Instant::now();
+        let mut tick = 0u32;
         loop {
             std::thread::sleep(Duration::from_millis(500));
             self.send_phone(PING, &self.now_us().to_be_bytes());
+            tick += 1;
+            // A monitor or webcam that was missing: pick it up when it is back.
+            if tick.is_multiple_of(10)
+                && self.is_pc_mode()
+                && !self.device_warnings.lock().unwrap().is_empty()
+                && !self.has_outputs_running()
+            {
+                self.refresh_sources();
+                let before = self.device_warnings.lock().unwrap().clone();
+                let _ = self.pc_video();
+                if *self.device_warnings.lock().unwrap() != before {
+                    diag::log("source", "a missing device is back");
+                    self.apply_source();
+                }
+            }
 
             let secs = last.elapsed().as_secs_f64();
             last = Instant::now();
@@ -905,6 +1006,14 @@ impl Core {
                 })
             })
         });
+        let replay = {
+            let r = self.replay.lock().unwrap();
+            json!({
+                "seconds": r.seconds(),
+                "buffered": r.buffered_secs().round(),
+                "bytes": r.bytes(),
+            })
+        };
         json!({
             "connected": i.connected,
             "source": self.source.lock().unwrap().clone(),
@@ -927,7 +1036,148 @@ impl Core {
             "recordError": i.record_error,
             "live": self.live.status_json(),
             "adb": adb,
+            "replay": replay,
+            "deviceWarnings": self.device_warnings.lock().unwrap().clone(),
         })
+    }
+
+    // ---------------- clips, hotkeys, preferences ----------------
+
+    /// A short message for the UI toast (and the log).
+    fn notify(&self, kind: &str, text: impl Into<String>) {
+        let text = text.into();
+        diag::log(kind, &text);
+        self.app
+            .emit("notice", json!({ "kind": kind, "text": text }))
+            .ok();
+    }
+
+    /// Saves the last `seconds` of the replay buffer as a clip, on its own
+    /// thread so the hotkey never stalls the stream.
+    pub fn save_clip(self: &Arc<Self>, seconds: u32) -> Result<(), String> {
+        let snap = {
+            let r = self.replay.lock().unwrap();
+            if !r.enabled() {
+                return Err("The replay buffer is off — turn it on in the Clips panel".into());
+            }
+            r.snapshot(seconds)
+                .ok_or("Nothing to clip yet — start the phone stream or PC capture first")?
+        };
+        let ffmpeg = self.live.ffmpeg();
+        let c = self.clone();
+        std::thread::Builder::new()
+            .name("clip".into())
+            .spawn(move || {
+                let dir = replay::clips_dir();
+                let label = format!("{seconds}s");
+                match snap.save(&dir, ffmpeg.as_deref(), &label) {
+                    Ok(path) => {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        c.notify(
+                            "clip",
+                            format!("Saved the last {:.0} s · {name}", snap.seconds),
+                        );
+                    }
+                    Err(e) => c.notify("clip", format!("Clip failed: {e}")),
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn set_replay_seconds(&self, seconds: u32) {
+        let seconds = seconds.min(replay::MAX_SECONDS);
+        self.replay.lock().unwrap().set_seconds(seconds);
+        let mut p = self.prefs.lock().unwrap();
+        p.replay_seconds = seconds;
+        p.save();
+        diag::log("clip", format!("replay buffer: {seconds} s"));
+    }
+
+    /// Runs a global hotkey's action. Called from the hotkey thread.
+    pub fn hotkey(self: &Arc<Self>, a: Action) {
+        let result = match a {
+            Action::Clip15 => self.save_clip(15),
+            Action::Clip30 => self.save_clip(30),
+            Action::Clip60 => self.save_clip(60),
+            Action::MuteMic => {
+                let muted = !self.mixer.mic_muted();
+                self.mixer
+                    .set_channel(audio::Source::Mic, None, Some(muted));
+                self.notify("hotkey", if muted { "Mic muted" } else { "Mic on" });
+                Ok(())
+            }
+            Action::Record => {
+                let recording = self.inner.lock().unwrap().recording.is_some()
+                    || self.pc_record.lock().unwrap().is_some();
+                if recording {
+                    self.stop_recording().map(|p| {
+                        let name = p.rsplit('\\').next().unwrap_or(&p).to_string();
+                        self.notify("hotkey", format!("Recording saved · {name}"));
+                    })
+                } else {
+                    self.start_recording()
+                        .map(|_| self.notify("hotkey", "Recording started"))
+                }
+            }
+            Action::Live => {
+                if self.live.is_live() {
+                    self.stop_live();
+                    self.notify("hotkey", "Stream ended");
+                    Ok(())
+                } else {
+                    self.start_live()
+                        .map(|_| self.notify("hotkey", "Going live…"))
+                }
+            }
+        };
+        if let Err(e) = result {
+            self.notify("hotkey", e);
+        }
+    }
+
+    pub fn hotkeys_json(&self) -> Value {
+        self.hotkeys
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|h| h.status_json())
+            .unwrap_or(Value::Null)
+    }
+
+    /// Applies and saves new hotkeys; returns the problems found.
+    pub fn set_hotkeys(&self, b: &Bindings) -> Vec<(String, String)> {
+        let probs = self
+            .hotkeys
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|h| h.set(b))
+            .unwrap_or_default();
+        let mut p = self.prefs.lock().unwrap();
+        p.hotkeys = crate::hotkeys::with_defaults(b);
+        p.save();
+        probs
+    }
+
+    pub fn set_mic(&self, id: Option<String>, name: Option<String>) {
+        self.mixer.set_mic_device(id, name);
+        let mut p = self.prefs.lock().unwrap();
+        p.mic = self
+            .mixer
+            .mic_device()
+            .map(|(id, name)| Device { id, name });
+        p.save();
+    }
+
+    pub fn set_voice_app(&self, id: &str) {
+        self.mixer.set_voice_app(id);
+        let mut p = self.prefs.lock().unwrap();
+        p.voice_app = self.mixer.voice_app();
+        p.save();
     }
 }
 
