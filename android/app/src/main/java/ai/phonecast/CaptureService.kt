@@ -54,6 +54,14 @@ class CaptureService : Service(), StreamClient.Listener {
     private var lastFrames = 0L
     private var lastBytes = 0L
 
+    // Heat protection: when Android reports the phone is getting hot, lower
+    // the bitrate (and at "severe", the resolution) until it has cooled down
+    // for a minute. Phones throttle the game itself otherwise.
+    private var thermalLimited = false
+    private var thermalCap = 0
+    private var lastHotMs = 0L
+    private var sizeCap = 0
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -162,7 +170,14 @@ class CaptureService : Service(), StreamClient.Listener {
         val short = minOf(p.x, p.y)
         val long = maxOf(p.x, p.y)
         val landscape = display.rotation == Surface.ROTATION_90 || display.rotation == Surface.ROTATION_270
-        return if (landscape) fit(long, short, settings.maxSize) else fit(short, long, settings.maxSize)
+        return if (landscape) fit(long, short, limitSize()) else fit(short, long, limitSize())
+    }
+
+    /** The user's size limit, further reduced while heat protection is active. */
+    private fun limitSize(): Int = when {
+        sizeCap <= 0 -> settings.maxSize
+        settings.maxSize <= 0 -> sizeCap
+        else -> minOf(settings.maxSize, sizeCap)
     }
 
     /** Size asked for (before any encoder fallback), to detect real changes. */
@@ -171,7 +186,7 @@ class CaptureService : Service(), StreamClient.Listener {
     /** Re-creates the encoder when the captured content changes size (rotation). */
     private fun resizeTo(width: Int, height: Int, reason: String) {
         val old = encoder ?: return
-        val (w, h) = fit(width, height, settings.maxSize)
+        val (w, h) = fit(width, height, limitSize())
         if (w <= 0 || h <= 0 || (w to h) == requestedSize) return
         Log.i(TAG, "$reason -> ${w}x$h")
         requestedSize = w to h
@@ -243,8 +258,13 @@ class CaptureService : Service(), StreamClient.Listener {
             val c = client
             if (enc != null && c != null) {
                 val now = System.currentTimeMillis()
-                if (currentBitrate < targetBitrate && now - lastCongestionMs > 3000) {
-                    setCurrentBitrate(minOf(targetBitrate, (currentBitrate * 1.1).toInt()))
+                val thermal = getSystemService(PowerManager::class.java).currentThermalStatus
+                applyThermal(thermal, now)
+                val ceiling = if (thermalLimited) minOf(targetBitrate, thermalCap) else targetBitrate
+                if (currentBitrate < ceiling && now - lastCongestionMs > 3000) {
+                    setCurrentBitrate(minOf(ceiling, (currentBitrate * 1.1).toInt()))
+                } else if (currentBitrate > ceiling) {
+                    setCurrentBitrate(ceiling)
                 }
                 val frames = enc.frames.get()
                 val bytes = enc.bytes.get()
@@ -268,15 +288,60 @@ class CaptureService : Service(), StreamClient.Listener {
                     .put("repeated", pacer?.repeated ?: 0)
                     .put("transport", settings.transport.name)
                     .put("audio", audio != null)
-                    .put("thermal", getSystemService(PowerManager::class.java).currentThermalStatus)
+                    .put("thermal", thermal)
+                    .put("heatLimited", thermalLimited)
                 batteryInfo(stats)
                 c.send(Packet(Protocol.STATS, 0, System.nanoTime() / 1000, stats.toString().toByteArray()))
 
-                status = if (c.connected) "Streaming ${enc.width}x${enc.height} · $fps fps · ${kbps / 1000} Mbps"
-                else "Waiting for PC at ${settings.connectHost}…"
+                status = when {
+                    !c.connected -> "Waiting for PC at ${settings.connectHost}…"
+                    thermalLimited -> "Streaming ${enc.width}x${enc.height} · $fps fps · ${kbps / 1000} Mbps · lowered: phone is hot"
+                    else -> "Streaming ${enc.width}x${enc.height} · $fps fps · ${kbps / 1000} Mbps"
+                }
                 updateNotification()
             }
             worker.postDelayed(this, 1000)
+        }
+    }
+
+    /** Heat protection: PowerManager thermal status 2 = moderate, 3 = severe. */
+    private fun applyThermal(thermal: Int, now: Long) {
+        if (!settings.heatProtect) return
+        if (thermal >= PowerManager.THERMAL_STATUS_MODERATE) {
+            lastHotMs = now
+            if (!thermalLimited) {
+                thermalLimited = true
+                thermalCap = maxOf(MIN_BITRATE, (targetBitrate * 0.6).toInt())
+                Log.i(TAG, "phone hot (level $thermal): bitrate capped at ${thermalCap / 1000} kbps")
+            }
+            if (thermal >= PowerManager.THERMAL_STATUS_SEVERE && sizeCap == 0) {
+                sizeCap = 1280
+                val (w, h) = captureSize()
+                resizeTo(w, h, "heat protection")
+            }
+        } else if (thermalLimited && now - lastHotMs > 60_000) {
+            thermalLimited = false
+            if (sizeCap != 0) {
+                sizeCap = 0
+                val (w, h) = captureSize()
+                resizeTo(w, h, "cooled down")
+            }
+            Log.i(TAG, "phone cooled down: limits removed")
+        }
+    }
+
+    /** Short vibration so you notice a lost connection mid-game. */
+    private fun buzz() {
+        runCatching {
+            val pattern = longArrayOf(0, 120, 80, 120)
+            if (Build.VERSION.SDK_INT >= 31) {
+                getSystemService(android.os.VibratorManager::class.java).defaultVibrator
+                    .vibrate(android.os.VibrationEffect.createWaveform(pattern, -1))
+            } else {
+                @Suppress("DEPRECATION")
+                (getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator)
+                    .vibrate(android.os.VibrationEffect.createWaveform(pattern, -1))
+            }
         }
     }
 
@@ -319,6 +384,7 @@ class CaptureService : Service(), StreamClient.Listener {
         worker.post {
             status = "PC disconnected, reconnecting…"
             updateNotification()
+            buzz()
         }
     }
 

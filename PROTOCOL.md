@@ -35,6 +35,12 @@ u8 type | u8 flags | i64 ptsUs | u32 len | payload[len]
 | 0x83 | PING | i64 pcTimeUs |
 | 0x84 | STOP | — |
 
+## Wi-Fi discovery (UDP 27185)
+The phone broadcasts `PCST-DISCOVER` to 255.255.255.255:27185. Every
+PhoneCast PC replies `PCST-HERE <computer name>` from its own address; the
+phone lists the replies so the user never types an IP. Plain UDP, no mDNS
+dependency, works on home routers that block multicast.
+
 ## Clock sync & latency
 PC sends PING every second. With `t0` = PC send time, `t1` = PC receive time,
 `p` = phone time in PONG: `offset = p − (t0 + t1) / 2`.

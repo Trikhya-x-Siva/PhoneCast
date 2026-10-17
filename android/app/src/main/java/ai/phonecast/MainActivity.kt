@@ -22,7 +22,13 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
+import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
+import android.app.AlertDialog
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
 
 /** Settings + start/stop. Plain Android views: no libraries, tiny APK. */
 class MainActivity : Activity() {
@@ -33,6 +39,8 @@ class MainActivity : Activity() {
     private lateinit var quality: Spinner
     private lateinit var fps: Spinner
     private lateinit var bitrate: Spinner
+    private lateinit var heat: Switch
+    private lateinit var wifiRow: LinearLayout
     private lateinit var statusView: TextView
     private lateinit var startButton: Button
 
@@ -121,6 +129,7 @@ class MainActivity : Activity() {
         maxSize = qualityOptions[quality.selectedItemPosition].second,
         fps = fpsOptions[fps.selectedItemPosition],
         bitrateBps = bitrateOptions[bitrate.selectedItemPosition].second,
+        heatProtect = heat.isChecked,
     )
 
     private fun load(s: StreamSettings) {
@@ -130,7 +139,67 @@ class MainActivity : Activity() {
         quality.setSelection(qualityOptions.indexOfFirst { it.second == s.maxSize }.coerceAtLeast(0))
         fps.setSelection(fpsOptions.indexOf(s.fps).coerceAtLeast(0))
         bitrate.setSelection(bitrateOptions.indexOfFirst { it.second == s.bitrateBps }.coerceAtLeast(0))
-        host.visibility = if (s.transport == Transport.WIFI) View.VISIBLE else View.GONE
+        heat.isChecked = s.heatProtect
+        wifiRow.visibility = if (s.transport == Transport.WIFI) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * Finds PhoneCast PCs on this Wi-Fi: broadcasts PCST-DISCOVER on UDP 27185
+     * and lists the PCs that answer (see PROTOCOL.md).
+     */
+    private fun findPc() {
+        CaptureService.status = "Looking for PhoneCast PCs on this Wi-Fi…"
+        Thread {
+            val found = linkedMapOf<String, String>() // ip -> name
+            try {
+                DatagramSocket().use { sock ->
+                    sock.broadcast = true
+                    sock.soTimeout = 400
+                    val msg = "PCST-DISCOVER".toByteArray()
+                    sock.send(DatagramPacket(msg, msg.size, InetAddress.getByName("255.255.255.255"), 27185))
+                    val deadline = System.currentTimeMillis() + 2000
+                    val buf = ByteArray(256)
+                    while (System.currentTimeMillis() < deadline) {
+                        val p = DatagramPacket(buf, buf.size)
+                        try {
+                            sock.receive(p)
+                        } catch (_: java.net.SocketTimeoutException) {
+                            continue
+                        }
+                        val text = String(buf, 0, p.length)
+                        if (text.startsWith("PCST-HERE")) {
+                            found[p.address.hostAddress ?: continue] = text.removePrefix("PCST-HERE").trim()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { Toast.makeText(this, "Search failed: ${e.message}", Toast.LENGTH_LONG).show() }
+                return@Thread
+            }
+            runOnUiThread {
+                when (found.size) {
+                    0 -> {
+                        CaptureService.status = "No PC found"
+                        Toast.makeText(
+                            this,
+                            "No PhoneCast PC found. Is the PC app open and on the same Wi-Fi?",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                    1 -> {
+                        host.setText(found.keys.first())
+                        CaptureService.status = "Found ${found.values.first()}"
+                    }
+                    else -> {
+                        val ips = found.keys.toList()
+                        AlertDialog.Builder(this)
+                            .setTitle("Which PC?")
+                            .setItems(ips.map { "${found[it]}  ($it)" }.toTypedArray()) { _, i -> host.setText(ips[i]) }
+                            .show()
+                    }
+                }
+            }
+        }.start()
     }
 
     // --- UI ---
@@ -185,10 +254,21 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
             setTextColor(Color.WHITE)
             setHintTextColor(MUTED)
+        }
+        wifiRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(host, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(Button(this@MainActivity).apply {
+                text = "Find PC"
+                isAllCaps = false
+                setTextColor(Color.WHITE)
+                background = GradientDrawable().apply { cornerRadius = px(10).toFloat(); setColor(CARD) }
+                setOnClickListener { findPc() }
+            }, LinearLayout.LayoutParams(WRAP_CONTENT, px(44)).apply { marginStart = px(8) })
             root.addView(this, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = px(8) })
         }
         transport.onItemSelectedListener = SimpleSelect {
-            host.visibility = if (it == 1) View.VISIBLE else View.GONE
+            wifiRow.visibility = if (it == 1) View.VISIBLE else View.GONE
         }
 
         label("Video codec")
@@ -199,6 +279,14 @@ class MainActivity : Activity() {
         fps = spinner(fpsOptions.map { "$it fps" })
         label("Bitrate (phone → PC)")
         bitrate = spinner(bitrateOptions.map { it.first })
+
+        heat = Switch(this).apply {
+            text = "Protect phone from heat (lower quality while hot)"
+            setTextColor(Color.WHITE)
+            isChecked = true
+            setPadding(px(4), px(16), px(4), 0)
+            root.addView(this, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        }
 
         startButton = Button(this).apply {
             text = "Start streaming"
