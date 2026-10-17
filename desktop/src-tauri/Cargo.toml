@@ -1,0 +1,30 @@
+[package]
+name = "phonecast"
+version = "0.1.0"
+description = "PhoneCast desktop: receive, record and stream your phone"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+socket2 = "0.5"
+# Mic noise suppression (RNNoise, pure Rust)
+nnnoiseless = { version = "0.5", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+# Mic + per-app (Discord) audio capture
+wasapi = "0.26"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_Security_Cryptography", "Win32_Graphics_Gdi"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

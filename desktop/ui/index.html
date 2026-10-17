@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PhoneCast</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <header>
+    <div class="brand">
+      <svg viewBox="0 0 108 108" class="logo" aria-hidden="true">
+        <defs>
+          <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#9b7bff"/><stop offset="1" stop-color="#5b3df5"/>
+          </linearGradient>
+        </defs>
+        <rect width="108" height="108" rx="26" fill="url(#lg)"/>
+        <path fill="#fff" fill-rule="evenodd" d="M38 24h26a6 6 0 0 1 6 6v48a6 6 0 0 1-6 6H38a6 6 0 0 1-6-6V30a6 6 0 0 1 6-6zm0 8v42h26V32z"/>
+        <path class="waves" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" d="M76 40a18 18 0 0 1 0 28M84 34a28 28 0 0 1 0 40"/>
+      </svg>
+      <span>Phone<b>Cast</b></span>
+    </div>
+
+    <div id="pill" class="pill">
+      <span class="dot"></span><span id="pillText">Waiting for phone</span>
+    </div>
+
+    <div class="actions">
+      <button id="folderBtn" class="btn ghost" title="Open recordings folder">
+        <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        Recordings
+      </button>
+      <button id="recBtn" class="btn rec" disabled>
+        <span class="recdot"></span><span id="recText">Record</span>
+      </button>
+      <button id="liveBtn" class="btn live" title="Stream to YouTube and Twitch">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14"/></svg>
+        <span id="liveText">Go live</span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section class="stage">
+      <div id="screen" class="screen">
+        <canvas id="video"></canvas>
+
+        <div id="empty" class="empty">
+          <div class="phone-anim" aria-hidden="true">
+            <div class="ph"><div class="ph-screen"></div></div>
+            <div class="beam b1"></div><div class="beam b2"></div><div class="beam b3"></div>
+          </div>
+          <div class="steps">
+            <h2>Connect your phone</h2>
+            <div class="step"><span>1</span><p><b>USB</b> — plug the phone in. PhoneCast sets everything up by itself.</p></div>
+            <div class="step"><span>2</span><p><b>Wi-Fi</b> — in the phone app choose Wi-Fi and enter <code id="wifiAddr">…</code></p></div>
+            <div class="step"><span>3</span><p>Open <b>PhoneCast</b> on the phone, tap <b>Start streaming</b>, then open your game.</p></div>
+          </div>
+        </div>
+
+        <div id="hud" class="hud hidden">
+          <span class="chip"><i class="live-dot"></i><span id="hudRes">—</span></span>
+          <span class="chip"><span id="hudFps">0</span> fps</span>
+          <span class="chip"><span id="hudLat">—</span> ms</span>
+          <span class="chip"><span id="hudMbps">0</span> Mbps</span>
+        </div>
+        <div class="badges">
+          <div id="liveBadge" class="live-badge hidden"><i></i>LIVE <span id="liveTime">0:00</span></div>
+          <div id="recBadge" class="rec-badge hidden"><i></i>REC <span id="recTime">0:00</span></div>
+        </div>
+      </div>
+
+      <section class="mixer">
+        <div class="mixer-head">
+          <h3>Audio mixer</h3>
+          <div class="toggles">
+            <label class="switch" title="Removes keyboard, fan and background noise from your mic">
+              <input type="checkbox" id="nsToggle" checked><span class="track"><span class="knob"></span></span>
+              Noise suppression
+            </label>
+            <label class="switch" title="Lowers the game volume while you or your teammates talk">
+              <input type="checkbox" id="duckToggle"><span class="track"><span class="knob"></span></span>
+              Auto-duck game
+            </label>
+          </div>
+        </div>
+        <div class="strips">
+          <div class="strip" data-src="game">
+            <div class="strip-top">
+              <div class="icon game"><svg viewBox="0 0 24 24"><path d="M6 9h4M8 7v4M15 9h.01M18 11h.01"/><path d="M17.3 5H6.7a4 4 0 0 0-4 3.6L2 15a3 3 0 0 0 5.2 2.1L9 15h6l1.8 2.1A3 3 0 0 0 22 15l-.7-6.4A4 4 0 0 0 17.3 5z"/></svg></div>
+              <div class="names"><b>Game</b><small class="status">Waiting for phone</small></div>
+              <button class="mute" title="Mute"><svg viewBox="0 0 24 24"><path class="spk" d="M11 5 6 9H2v6h4l5 4z"/><path class="on" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/><path class="off" d="m23 9-6 6M17 9l6 6"/></svg></button>
+            </div>
+            <div class="meter"><div class="fill"></div><div class="peak"></div></div>
+            <div class="vol"><input type="range" min="0" max="200" value="100"><output>100%</output></div>
+          </div>
+
+          <div class="strip" data-src="discord">
+            <div class="strip-top">
+              <div class="icon discord"><svg viewBox="0 0 24 24"><path d="M8 12h.01M16 12h.01"/><path d="M7.5 7.5c3-1 6-1 9 0M7 16.5c3.3 1.3 6.7 1.3 10 0"/><path d="M15.5 17.5 16.5 19.5c3.5-1 5-3 5.5-4.5 0-4-1-7.5-3-10.5-1.5-.7-3-1.2-4.5-1.5l-1 2M8.5 17.5 7.5 19.5c-3.5-1-5-3-5.5-4.5 0-4 1-7.5 3-10.5 1.5-.7 3-1.2 4.5-1.5l1 2"/></svg></div>
+              <div class="names"><b>Discord</b><small class="status">Looking for Discord…</small></div>
+              <button class="mute" title="Mute"><svg viewBox="0 0 24 24"><path class="spk" d="M11 5 6 9H2v6h4l5 4z"/><path class="on" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/><path class="off" d="m23 9-6 6M17 9l6 6"/></svg></button>
+            </div>
+            <div class="meter"><div class="fill"></div><div class="peak"></div></div>
+            <div class="vol"><input type="range" min="0" max="200" value="100"><output>100%</output></div>
+            <select id="voiceSelect" title="Where Discord is running"><option value="auto">Auto · Discord app, else browser</option></select>
+          </div>
+
+          <div class="strip" data-src="mic">
+            <div class="strip-top">
+              <div class="icon mic"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg></div>
+              <div class="names"><b>Mic</b><small class="status">Starting…</small></div>
+              <button class="mute" title="Mute"><svg viewBox="0 0 24 24"><path class="spk" d="M11 5 6 9H2v6h4l5 4z"/><path class="on" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/><path class="off" d="m23 9-6 6M17 9l6 6"/></svg></button>
+            </div>
+            <div class="meter"><div class="fill"></div><div class="peak"></div></div>
+            <div class="vol"><input type="range" min="0" max="200" value="100"><output>100%</output></div>
+            <select id="micSelect" title="Microphone"><option value="">Windows default mic</option></select>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <aside>
+      <div class="card">
+        <h3>Source</h3>
+        <div class="seg wide-seg" id="sourceSeg">
+          <button data-v="phone"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>Phone</button>
+          <button data-v="screen"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>This PC</button>
+        </div>
+        <div id="pcOptions" class="pc-options hidden">
+          <label class="field"><span>Screen</span><select id="monitorSelect"></select></label>
+          <label class="switch" style="margin:10px 0 6px"><input type="checkbox" id="camToggle"><span class="track"><span class="knob"></span></span>Webcam picture-in-picture</label>
+          <div id="camOptions" class="cam-options hidden">
+            <label class="field"><span>Camera</span><select id="camSelect"></select></label>
+            <div class="row2">
+              <label class="field"><span>Size</span><select id="camSize"><option value="0.18">Small</option><option value="0.25" selected>Medium</option><option value="0.33">Large</option></select></label>
+              <label class="field"><span>Corner</span><select id="camCorner"><option value="br" selected>Bottom right</option><option value="bl">Bottom left</option><option value="tr">Top right</option><option value="tl">Top left</option></select></label>
+            </div>
+            <label class="switch" style="margin-top:6px"><input type="checkbox" id="camMirror"><span class="track"><span class="knob"></span></span>Mirror</label>
+          </div>
+          <p class="hint">Captures the whole screen straight on the GPU. For PC games use borderless/windowed fullscreen; exclusive fullscreen may show black.</p>
+        </div>
+      </div>
+
+      <div id="liveCard" class="card live-card hidden">
+        <h3>Live</h3>
+        <div id="liveDests"></div>
+      </div>
+
+      <div class="card">
+        <h3>Stream health</h3>
+        <div class="stats">
+          <div class="tile"><span id="fps" class="big">0</span><span class="unit">fps</span></div>
+          <div class="tile"><span id="latency" class="big">—</span><span class="unit">ms delay</span></div>
+          <div class="tile"><span id="mbps" class="big">0</span><span class="unit">Mbps</span></div>
+        </div>
+        <canvas id="spark" class="spark" height="44"></canvas>
+        <dl>
+          <dt>Video</dt><dd id="videoInfo">—</dd>
+          <dt>Smoothness</dt><dd id="smooth">—</dd>
+          <dt>Dropped frames</dt><dd id="dropped">0</dd>
+          <dt>Round-trip</dt><dd id="rtt">—</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h3>Phone</h3>
+        <div class="phone-row">
+          <div class="ring" id="batRing" style="--p:0"><span id="batPct">—</span></div>
+          <dl>
+            <dt>Device</dt><dd id="device">—</dd>
+            <dt>Temperature</dt><dd id="temp">—</dd>
+            <dt>Heat</dt><dd id="thermal">—</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Connection</h3>
+        <dl>
+          <dt>Link</dt><dd id="link">—</dd>
+          <dt>USB</dt><dd id="usb">—</dd>
+          <dt>Wi-Fi address</dt><dd id="lan" class="mono">—</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h3>Quality</h3>
+        <label class="slider-label">
+          <span>Phone → PC bitrate</span>
+          <span id="brValue" class="mono">50 Mbps</span>
+        </label>
+        <input id="bitrate" type="range" min="10" max="100" step="5" value="50" />
+        <p class="hint">USB: 50 Mbps is visually lossless. Wi-Fi: 15–30 Mbps; PhoneCast lowers it automatically if the network struggles.</p>
+        <button id="keyBtn" class="btn ghost wide">Refresh picture</button>
+        <button id="logBtn" class="btn ghost wide" title="Opens the log folder. Attach the log when reporting a problem.">Open diagnostics</button>
+      </div>
+    </aside>
+  </main>
+
+  <div id="liveModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="liveTitle">
+    <div class="sheet">
+      <div class="sheet-head">
+        <h2 id="liveTitle">Go live</h2>
+        <button class="icon-btn" data-close title="Close"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <p class="sheet-sub">Stream to YouTube, Twitch or both at once. Each gets its own best quality, encoded on <b id="encName">your GPU</b>.</p>
+      <div id="ffmpegMissing" class="warn-box hidden">FFmpeg isn't installed on this PC, so PhoneCast can't go live yet.</div>
+
+      <div class="dest" data-dest="youtube">
+        <div class="dest-head">
+          <div class="dest-icon yt"><svg viewBox="0 0 24 24"><path d="M22 8.5a3 3 0 0 0-2.1-2.1C18 6 12 6 12 6s-6 0-7.9.4A3 3 0 0 0 2 8.5 31 31 0 0 0 2 12a31 31 0 0 0 .1 3.5 3 3 0 0 0 2 2.1C6 18 12 18 12 18s6 0 7.9-.4a3 3 0 0 0 2.1-2.1A31 31 0 0 0 22 12a31 31 0 0 0 0-3.5z"/><path d="m10 15 5-3-5-3z"/></svg></div>
+          <div class="dest-name"><b>YouTube</b><small>Up to 4K60</small></div>
+          <label class="switch big-switch"><input type="checkbox" class="enabled"><span class="track"><span class="knob"></span></span></label>
+        </div>
+        <div class="dest-body">
+          <label class="field"><span>Stream key</span>
+            <div class="key-row"><input type="password" class="key" autocomplete="off" spellcheck="false" placeholder="Paste your YouTube stream key"><button class="icon-btn reveal" title="Show key"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+          </label>
+          <p class="where">Where: <b>studio.youtube.com</b> → <b>Create → Go live</b> → <b>Stream</b> tab → copy <b>Stream key</b>.</p>
+          <label class="field"><span>Quality</span><select class="quality"></select></label>
+        </div>
+      </div>
+
+      <div class="dest" data-dest="twitch">
+        <div class="dest-head">
+          <div class="dest-icon tw"><svg viewBox="0 0 24 24"><path d="M21 2H3v16h5v4l4-4h5l4-4z"/><path d="M11 11V7M16 11V7"/></svg></div>
+          <div class="dest-name"><b>Twitch</b><small>Up to 1080p60</small></div>
+          <label class="switch big-switch"><input type="checkbox" class="enabled"><span class="track"><span class="knob"></span></span></label>
+        </div>
+        <div class="dest-body">
+          <label class="field"><span>Stream key</span>
+            <div class="key-row"><input type="password" class="key" autocomplete="off" spellcheck="false" placeholder="Paste your Twitch stream key"><button class="icon-btn reveal" title="Show key"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+          </label>
+          <p class="where">Where: <b>dashboard.twitch.tv</b> → <b>Settings → Stream</b> → copy <b>Primary Stream key</b>.</p>
+          <label class="field"><span>Quality</span><select class="quality"></select></label>
+        </div>
+      </div>
+
+      <div class="framing">
+        <span>Picture</span>
+        <div class="seg" id="framing">
+          <button data-v="fit" title="Whole game screen, with thin bars above and below">Fit · whole screen</button>
+          <button data-v="fill" title="Fills 16:9, trims a little from the sides">Fill · crop sides</button>
+        </div>
+      </div>
+
+      <div class="sheet-foot">
+        <div class="upload"><span id="uploadNeed">—</span><small>upload speed needed</small></div>
+        <button class="btn ghost" id="liveSave">Save</button>
+        <button class="btn live" id="liveStart">Start streaming</button>
+      </div>
+      <p class="fine">Stream keys are encrypted with your Windows account and never leave this PC except to YouTube/Twitch.</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>

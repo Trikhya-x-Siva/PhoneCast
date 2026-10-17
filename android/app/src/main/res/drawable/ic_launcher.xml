@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#7C5CFF" android:pathData="M0,0h108v108h-108z" />
+    <!-- phone outline -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M38,24h26a6,6 0,0 1,6 6v48a6,6 0,0 1,-6 6h-26a6,6 0,0 1,-6 -6v-48a6,6 0,0 1,6 -6zM38,32v42h26v-42z" />
+    <!-- broadcast arcs -->
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="4"
+        android:pathData="M76,40a18,18 0,0 1,0 28M84,34a28,28 0,0 1,0 40" />
+</vector>

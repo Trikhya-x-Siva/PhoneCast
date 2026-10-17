@@ -1,0 +1,34 @@
+name: Bug report
+description: Something is broken, laggy or wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and GPU
+      placeholder: Windows 11 24H2, RTX 4050 Laptop
+    validations:
+      required: true
+  - type: input
+    id: phone
+    attributes:
+      label: Phone model and Android version (if phone streaming)
+      placeholder: OnePlus 13R, Android 16
+  - type: dropdown
+    id: link
+    attributes:
+      label: Connection
+      options: [USB, Wi-Fi, PC capture (no phone)]
+  - type: textarea
+    id: log
+    attributes:
+      label: Diagnostics log
+      description: In PhoneCast click "Open diagnostics" and paste the lines around the problem. The log contains no keys or personal data.
+      render: text

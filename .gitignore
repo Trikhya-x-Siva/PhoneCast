@@ -1,0 +1,31 @@
+# Build output
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/node_modules/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.kotlin/
+
+# Binaries fetched by scripts (see desktop/fetch-adb.ps1), never committed
+desktop/src-tauri/bin/
+
+# Local packaging output and logs
+share/
+install.log
+*.log
+
+# Secrets: signing keys and stream keys must never be committed
+*.jks
+*.keystore
+*.pfx
+*.p12
+live.json
+
+# Editors / OS
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db

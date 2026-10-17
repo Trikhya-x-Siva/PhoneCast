@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PhoneCast",
+  "version": "0.1.0",
+  "identifier": "ai.phonecast.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "PhoneCast",
+        "width": 1280,
+        "height": 780,
+        "minWidth": 960,
+        "minHeight": 600,
+        "backgroundColor": "#0F1117"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "PhoneCast",
+    "shortDescription": "Stream your phone games to your PC",
+    "resources": {
+      "bin/adb.exe": "adb.exe",
+      "bin/AdbWinApi.dll": "AdbWinApi.dll",
+      "bin/AdbWinUsbApi.dll": "AdbWinUsbApi.dll"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ]
+  }
+}

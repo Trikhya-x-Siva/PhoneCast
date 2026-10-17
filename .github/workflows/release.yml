@@ -1,0 +1,77 @@
+# Builds the Windows installer and the Android APK on every version tag
+# (v1.2.3) and attaches both to a draft GitHub Release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: Install dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Bundle adb (Apache-2.0, see NOTICE)
+        shell: pwsh
+        run: ./desktop/fetch-adb.ps1
+      - name: Tests
+        working-directory: desktop/src-tauri
+        run: cargo test
+      - name: Build and attach to release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "PhoneCast ${{ github.ref_name }}"
+          releaseDraft: true
+          args: --bundles nsis
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Release keystore (optional; falls back to debug signing)
+        if: env.KEYSTORE_B64 != ''
+        run: echo "$KEYSTORE_B64" | base64 -d > android/release.jks
+      - name: Build APK
+        working-directory: android
+        env:
+          KEYSTORE_PATH: ${{ env.KEYSTORE_B64 != '' && 'release.jks' || '' }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk PhoneCast-${{ github.ref_name }}.apk
+      - name: Attach APK to release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: android/PhoneCast-${{ github.ref_name }}.apk

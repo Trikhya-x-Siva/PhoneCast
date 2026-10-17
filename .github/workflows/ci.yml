@@ -1,0 +1,41 @@
+# Compiles and tests on every push and pull request.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - name: Format
+        working-directory: desktop/src-tauri
+        run: cargo fmt --check
+      - name: Clippy
+        working-directory: desktop/src-tauri
+        run: cargo clippy -- -D warnings
+      - name: Tests
+        working-directory: desktop/src-tauri
+        run: cargo test
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - working-directory: android
+        run: chmod +x gradlew && ./gradlew :app:assembleRelease --no-daemon

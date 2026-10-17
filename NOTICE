@@ -1,0 +1,22 @@
+PhoneCast
+Copyright 2026 PhoneCast contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product bundles or uses the following third-party software:
+
+* Android Debug Bridge (adb) and AdbWinApi/AdbWinUsbApi, part of the
+  Android SDK Platform-Tools by Google LLC, licensed under the Apache
+  License 2.0. Downloaded by desktop/fetch-adb.ps1 and shipped inside the
+  Windows installer so USB mode works without a separate install.
+  https://developer.android.com/tools/releases/platform-tools
+
+* FFmpeg (https://ffmpeg.org), licensed under the LGPL/GPL. PhoneCast does
+  not bundle FFmpeg; it runs a user-installed copy as a separate process
+  for "Go live" encoding.
+
+* nnnoiseless, a Rust port of RNNoise (BSD-3-Clause), for mic noise
+  suppression.
+
+* Tauri, wasapi, tungstenite, serde, chrono, socket2, windows-sys and
+  other Rust crates under MIT/Apache-2.0; see desktop/src-tauri/Cargo.lock.
