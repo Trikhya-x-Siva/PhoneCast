@@ -19,6 +19,9 @@ use std::os::windows::process::CommandExt;
 
 pub const DEFAULT_SECONDS: u32 = 90;
 pub const MAX_SECONDS: u32 = 300;
+/// Hard memory ceiling: a 50 Mbps phone stream is ~6 MB/s, so 90 s is
+/// ~560 MB; beyond this the buffer keeps fewer seconds instead of growing.
+pub const MAX_BYTES: usize = 1200 << 20;
 
 pub struct ReplayBuffer {
     cap_us: i64,
@@ -127,15 +130,31 @@ impl ReplayBuffer {
     }
 
     /// Drops everything before the newest keyframe that still leaves `cap`
-    /// seconds in the buffer.
+    /// seconds in the buffer, then whole keyframe groups while over the
+    /// memory ceiling.
     fn trim(&mut self) {
         let Some(last) = self.last_video_pts else {
             return;
         };
-        let Some(k) = self.keyframe_at_or_before(last - self.cap_us) else {
-            return;
-        };
-        for m in self.items.drain(..k) {
+        if let Some(k) = self.keyframe_at_or_before(last - self.cap_us) {
+            self.drop_front(k);
+        }
+        while self.bytes > MAX_BYTES {
+            // The next keyframe after the first item starts the next group.
+            let next = self
+                .items
+                .iter()
+                .skip(1)
+                .position(|m| matches!(m, Media::Video { key: true, .. }));
+            match next {
+                Some(i) => self.drop_front(i + 1),
+                None => break, // one group only; nothing more can go
+            }
+        }
+    }
+
+    fn drop_front(&mut self, n: usize) {
+        for m in self.items.drain(..n) {
             self.bytes -= match &m {
                 Media::Video { data, .. } => data.len(),
                 Media::Audio { pcm, .. } => pcm.len(),
@@ -387,6 +406,29 @@ mod tests {
         // Shrinking trims right away.
         b.set_seconds(10);
         assert!(b.buffered_secs() >= 10.0 && b.buffered_secs() < 12.1);
+        assert!(first_is_keyframe(&b));
+    }
+
+    #[test]
+    fn memory_ceiling_keeps_fewer_seconds() {
+        let mut b = ReplayBuffer::new(90);
+        b.push(&Media::Config(cfg()));
+        // 2 MB frames at 60 fps = 120 MB/s: the 1.2 GB ceiling holds ~10 s.
+        let mut t = 0i64;
+        for i in 0..(30 * 60) {
+            b.push(&Media::Video {
+                pts: t,
+                key: (i as usize).is_multiple_of(GOP),
+                data: Arc::new(vec![0u8; 2 << 20]),
+            });
+            t += FRAME;
+        }
+        assert!(b.bytes() <= MAX_BYTES, "{} bytes", b.bytes());
+        assert!(
+            b.buffered_secs() >= 8.0 && b.buffered_secs() <= 12.0,
+            "{}",
+            b.buffered_secs()
+        );
         assert!(first_is_keyframe(&b));
     }
 

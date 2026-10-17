@@ -1340,6 +1340,236 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod throttle_tests {
+    //! Simulated slow upload: the live job streams FLV over TCP to a local
+    //! sink that reads at a limited rate (what a congested upload looks like
+    //! to FFmpeg under RTMP, which also runs over TCP). The bitrate must step
+    //! down while the sink is slow and step back up after it is lifted.
+    //! Takes ~2.5 minutes:
+    //! `cargo test slow_upload_steps_bitrate_down_and_up -- --ignored --nocapture`
+    use super::*;
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::sync::atomic::AtomicU64;
+
+    /// Accepts connections forever; each one is drained at `limit` bytes/s
+    /// (u64::MAX = unlimited) with a small receive buffer so back-pressure
+    /// reaches FFmpeg quickly.
+    fn slow_sink(limit: Arc<AtomicU64>) -> u16 {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in l.incoming().flatten() {
+                socket2::SockRef::from(&stream)
+                    .set_recv_buffer_size(64 * 1024)
+                    .ok();
+                let limit = limit.clone();
+                std::thread::spawn(move || {
+                    let mut s = stream;
+                    let mut buf = vec![0u8; 16 * 1024];
+                    let start = Instant::now();
+                    let mut total = 0u64;
+                    while let Ok(n) = s.read(&mut buf) {
+                        if n == 0 {
+                            break;
+                        }
+                        total += n as u64;
+                        let lim = limit.load(Ordering::SeqCst);
+                        if lim != u64::MAX {
+                            // Sleep until `total` bytes are "allowed" by the rate.
+                            let due = Duration::from_secs_f64(total as f64 / lim as f64);
+                            if let Some(w) = due.checked_sub(start.elapsed()) {
+                                std::thread::sleep(w);
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    /// 8 s of 720p60 test video as access units: (keyframe, Annex-B bytes).
+    fn test_video(ffmpeg: &PathBuf, enc: &str) -> (Vec<u8>, Vec<(bool, Vec<u8>)>) {
+        let mut cmd = Command::new(ffmpeg);
+        cmd.args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1280x720:rate=60",
+            "-t",
+            "8",
+            "-c:v",
+            enc,
+            "-b:v",
+            "6M",
+            "-g",
+            "120",
+            "-bf",
+            "0",
+            "-aud",
+            "1",
+            "-f",
+            "h264",
+            "pipe:1",
+        ]);
+        cmd.stdin(Stdio::null()).stderr(Stdio::inherit());
+        let data = cmd.output().unwrap().stdout;
+        assert!(data.len() > 100_000, "no test video produced");
+        let mut csd = Vec::new();
+        let mut aus: Vec<(bool, Vec<u8>)> = Vec::new();
+        for n in crate::mkv::split_nals(&data) {
+            match n[0] & 0x1F {
+                9 => aus.push((false, Vec::new())),
+                7 | 8 if aus.len() <= 1 => {
+                    csd.extend_from_slice(&[0, 0, 0, 1]);
+                    csd.extend_from_slice(n);
+                }
+                6..=8 => {}
+                t => {
+                    let au = aus.last_mut().unwrap();
+                    au.0 |= t == 5;
+                    au.1.extend_from_slice(&[0, 0, 0, 1]);
+                    au.1.extend_from_slice(n);
+                }
+            }
+        }
+        aus.retain(|a| !a.1.is_empty());
+        assert!(aus[0].0, "first access unit must be a keyframe");
+        (csd, aus)
+    }
+
+    #[test]
+    #[ignore]
+    fn slow_upload_steps_bitrate_down_and_up() {
+        let ffmpeg = find_ffmpeg().expect("ffmpeg");
+        let enc = probe_encoders(&ffmpeg);
+        println!("encoder: {}", enc.h264);
+        let (csd, aus) = test_video(&ffmpeg, &enc.h264);
+        println!("{} access units of test video", aus.len());
+
+        // Sink allows 55 % of the stream's bitrate (4 Mbps video + audio).
+        let limit = Arc::new(AtomicU64::new(4_200_000 / 8 * 55 / 100));
+        let port = slow_sink(limit.clone());
+        let job = Job {
+            ffmpeg: ffmpeg.clone(),
+            url: format!("tcp://127.0.0.1:{port}"),
+            encoder: enc.h264.clone(),
+            w: 1280,
+            h: 720,
+            kbps: 4_000,
+            hevc: false,
+            fill: false,
+            pc: None,
+            file: false,
+        };
+        let cfg = VideoConfig {
+            codec: crate::mkv::CODEC_H264,
+            width: 1280,
+            height: 720,
+            csd,
+        };
+        let status = Arc::new(Mutex::new(DestStatus::new(
+            "test",
+            "Test",
+            "720p60".into(),
+            4_000,
+        )));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (mut tx, rx) = SinkTx::new(800);
+        let (st, sp) = (status.clone(), stop.clone());
+        let t = std::thread::spawn(move || job.run(rx, cfg, Arc::new(|| {}), st, sp));
+
+        // Feed the 8 s loop in real time, watching the status.
+        let start = Instant::now();
+        let mut i = 0i64;
+        let mut audio_t = 0i64;
+        let mut stepped_down_at: Option<Duration> = None;
+        let mut stepped_up_at: Option<Duration> = None;
+        let mut lifted = false;
+        let mut last_print = Instant::now();
+        while start.elapsed() < Duration::from_secs(170) {
+            let (key, au) = &aus[(i as usize) % aus.len()];
+            let pts = 1_000_000 + i * 16_667;
+            tx.push(&Media::Video {
+                pts,
+                key: *key,
+                data: Arc::new(au.clone()),
+            });
+            while audio_t < pts + 16_667 {
+                tx.push(&Media::Audio {
+                    pts: audio_t.max(1_000_000),
+                    pcm: Arc::new(vec![0u8; 1920]),
+                });
+                audio_t += 10_000;
+            }
+            i += 1;
+            if let Some(w) = Duration::from_micros(i as u64 * 16_667).checked_sub(start.elapsed()) {
+                std::thread::sleep(w);
+            }
+            let s = status.lock().unwrap().clone();
+            if last_print.elapsed() >= Duration::from_secs(5) {
+                last_print = Instant::now();
+                println!(
+                    "t={:>3}s state={} speed={:.2}x kbps_now={} health={} note={:?}",
+                    start.elapsed().as_secs(),
+                    s.state,
+                    s.speed,
+                    s.kbps_now,
+                    s.health,
+                    s.note
+                );
+            }
+            if stepped_down_at.is_none() && s.kbps_now < 4_000 {
+                stepped_down_at = Some(start.elapsed());
+                println!(
+                    "stepped down to {} kbps after {:?}",
+                    s.kbps_now,
+                    start.elapsed()
+                );
+                assert_eq!(s.health, "reduced");
+                assert!(s
+                    .note
+                    .as_deref()
+                    .unwrap_or("")
+                    .starts_with("Upload struggling"));
+            }
+            // Lift the throttle once we are down to a rate the sink accepted,
+            // then expect a step back up after a stable minute.
+            if !lifted
+                && stepped_down_at.is_some_and(|d| start.elapsed() > d + Duration::from_secs(20))
+            {
+                lifted = true;
+                limit.store(u64::MAX, Ordering::SeqCst);
+                println!("throttle lifted at {:?}", start.elapsed());
+            }
+            if lifted
+                && stepped_up_at.is_none()
+                && s.note
+                    .as_deref()
+                    .is_some_and(|n| n.contains("raised") || n.contains("recovered"))
+            {
+                stepped_up_at = Some(start.elapsed());
+                println!("stepped back up at {:?}: {:?}", start.elapsed(), s.note);
+                break;
+            }
+        }
+        stop.store(true, Ordering::SeqCst);
+        drop(tx);
+        t.join().unwrap();
+        let down = stepped_down_at.expect("bitrate never stepped down on a slow upload");
+        assert!(down < Duration::from_secs(45), "step-down took {down:?}");
+        assert!(
+            stepped_up_at.is_some(),
+            "bitrate never stepped back up after the upload recovered"
+        );
+    }
+}
+
 // ---------------- DPAPI (stream key encryption) ----------------
 
 #[cfg(windows)]

@@ -26,7 +26,7 @@ type CoreState<'a> = State<'a, Arc<Core>>;
 fn get_info(core: CoreState) -> Value {
     json!({
         "previewPort": *core.preview_port.lock().unwrap(),
-        "phonePort": core::PHONE_PORT,
+        "phonePort": core::phone_port(),
         "lanIp": core::lan_ip(),
         "recordingsDir": core::recordings_dir().display().to_string(),
     })
@@ -232,7 +232,7 @@ fn main() {
             let core = Core::start(app.handle().clone()).map_err(|e| {
                 format!(
                     "PhoneCast could not open port {}: {e}. Is it already running?",
-                    core::PHONE_PORT
+                    core::phone_port()
                 )
             })?;
             let ai = ai::Ai::new(app.handle().clone(), core.mixer.clone());

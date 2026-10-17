@@ -26,6 +26,15 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 pub const PHONE_PORT: u16 = 27183;
+
+/// The port the phone connects to. `PHONECAST_PORT` overrides it so a
+/// development build can run next to the installed app.
+pub fn phone_port() -> u16 {
+    std::env::var("PHONECAST_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(PHONE_PORT)
+}
 const PREVIEW_PORT: u16 = 27184;
 
 // phone -> PC
@@ -162,7 +171,7 @@ impl Core {
         *core.hotkeys.lock().unwrap() = Some(hk);
 
         // Listen on all interfaces: 127.0.0.1 for USB (adb reverse), LAN for Wi-Fi.
-        let listener = TcpListener::bind(("0.0.0.0", PHONE_PORT))?;
+        let listener = TcpListener::bind(("0.0.0.0", phone_port()))?;
         let c = core.clone();
         std::thread::Builder::new()
             .name("phone-listener".into())
@@ -176,7 +185,7 @@ impl Core {
                 }
             })?;
 
-        let preview = TcpListener::bind(("127.0.0.1", PREVIEW_PORT))
+        let preview = TcpListener::bind(("127.0.0.1", PREVIEW_PORT + phone_port() - PHONE_PORT))
             .or_else(|_| TcpListener::bind(("127.0.0.1", 0)))?;
         *core.preview_port.lock().unwrap() = preview.local_addr()?.port();
         let c = core.clone();
@@ -192,7 +201,7 @@ impl Core {
                 }
             })?;
 
-        adb::spawn(PHONE_PORT, core.adb.clone());
+        adb::spawn(phone_port(), core.adb.clone());
 
         let c = core.clone();
         let app2 = app.clone();

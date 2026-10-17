@@ -370,6 +370,10 @@ impl ScreenPreview {
         let mut chunk = vec![0u8; 64 * 1024];
         let mut csd: Option<Vec<u8>> = None;
         let mut frames = 0i64;
+        // The raw H.264 pipe carries no timestamps and frames arrive in
+        // bursts, so put them on a steady 60 fps grid anchored to the clock
+        // (re-anchored after a pause), the way the recorder expects.
+        let mut next_pts: Option<i64> = None;
         loop {
             if stop.load(Ordering::SeqCst) {
                 break;
@@ -410,7 +414,12 @@ impl ScreenPreview {
                 }
                 if !frame.is_empty() && csd.is_some() {
                     frames += 1;
-                    let pts = epoch.elapsed().as_micros() as i64;
+                    let now = epoch.elapsed().as_micros() as i64;
+                    let pts = match next_pts {
+                        Some(p) if (now - p).abs() < 200_000 => p,
+                        _ => now,
+                    };
+                    next_pts = Some(pts + 16_667);
                     on_frame(key, pts, frame);
                 }
                 let _ = frames;

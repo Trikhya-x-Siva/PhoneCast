@@ -50,13 +50,21 @@ The most-requested capture features, built on GPU-only paths:
   quality for each platform; one-click apply.
 
 ## v0.3 — reliability and streamer tools
-- **Dynamic bitrate** on upload congestion with a visible health indicator
-  (Streamlabs' most-marketed feature; OBS hides it).
+Done so far (see CHANGELOG):
+- ✅ **Dynamic bitrate** on upload congestion with a visible health indicator
+  (Streamlabs' most-marketed feature; OBS hides it). Per destination:
+  −20 % after 3 s of struggle, back up after a stable minute.
+- ✅ **Replay buffer / instant clips**: Ctrl+Shift+F8/F9/F10 save the last
+  15 / 30 / 60 s from an in-memory buffer (OBS idea #263) as MP4 without
+  re-encoding. Still to do: send a clip to the phone for Shorts/TikTok.
+- ✅ **Global hotkeys** for clips, mic mute, record and go live that work
+  while the game has focus (OBS #4126, #10701), rebindable.
+- ✅ **Settings never reset** after Windows updates: mic, monitor and webcam
+  by stable ID, with a plain warning when one is missing (OBS #12050).
+
+Next:
 - **Reconnect that never loses audio** (OBS #5572): outputs re-sync from the
   phone clock after any drop.
-- **Replay buffer / instant clips**: hotkeys for 15 s / 30 s / 60 s clips from
-  a disk-backed buffer (OBS idea #263), saved as MP4 and optionally sent to
-  the phone for Shorts/TikTok.
 - **Vertical output**: a second 9:16 canvas for TikTok/Shorts/Kick alongside
   the 16:9 stream (why Aitum Vertical is a top OBS plugin).
 - **Multistream to more platforms**: Kick, TikTok, custom RTMP(S)/SRT.
@@ -66,8 +74,7 @@ The most-requested capture features, built on GPU-only paths:
   issues #776, #4208): the phone app already streams; add a camera mode.
 - **Gamepad / Stream Deck / MIDI hotkeys** for scene switches and mute.
 - **ISO recording**: each source as its own track for editing.
-- **Settings never reset** after Windows updates: device selection by stable
-  ID with graceful fallback and a warning (OBS #12050).
+- **Scene hotkeys** on the same global-hotkey engine once scenes exist (v0.2).
 
 ## v0.4 — lightweight local AI (optional, off by default)
 All of it runs on the CPU as a separate, crash-isolated helper process, so
