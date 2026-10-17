@@ -600,13 +600,9 @@ impl Core {
         }
         if self.live.push(&m) {
             want_key = true;
-            diag::log(
-                "live",
-                "a live stream fell behind (upload slow?) - skipping to next keyframe",
-            );
         }
         if want_key {
-            self.request_keyframe();
+            self.request_keyframe_limited("recorder or live stream fell behind");
         }
     }
 
@@ -630,6 +626,20 @@ impl Core {
 
     pub fn request_keyframe(&self) -> bool {
         self.send_phone(REQUEST_KEYFRAME, &[])
+    }
+
+    /// Keyframe request for "an output fell behind": at most one per second.
+    /// Without the limit a slow preview asked for a keyframe on every frame,
+    /// and the flood of 1–2 MB keyframes made the stream lag badly.
+    fn request_keyframe_limited(&self, why: &str) {
+        static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+        let mut last = LAST.lock().unwrap();
+        if last.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+            return;
+        }
+        *last = Some(Instant::now());
+        diag::log("video", format!("{why} - skipping to next keyframe"));
+        self.request_keyframe();
     }
 
     // ---------------- recording ----------------
@@ -808,8 +818,7 @@ impl Core {
         });
         drop(clients);
         if want_key {
-            diag::log("preview", "preview fell behind - skipping to next keyframe");
-            self.request_keyframe();
+            self.request_keyframe_limited("preview fell behind");
         }
     }
 
@@ -818,7 +827,8 @@ impl Core {
         let Ok(mut ws) = tungstenite::accept(stream) else {
             return;
         };
-        let (tx, rx) = sync_channel::<Arc<Vec<u8>>>(8);
+        // ~0.5 s of frames: a UI hiccup must not turn into dropped frames.
+        let (tx, rx) = sync_channel::<Arc<Vec<u8>>>(32);
 
         // Current config first, then wait for a fresh keyframe.
         if let Some(cfg) = self.inner.lock().unwrap().video.clone() {
