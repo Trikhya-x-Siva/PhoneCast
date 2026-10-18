@@ -9,6 +9,7 @@ mod compositor;
 mod core;
 mod diag;
 mod engine;
+mod gamemode;
 mod hotkeys;
 mod live;
 mod mkv;
@@ -84,6 +85,11 @@ fn set_voice_app(core: CoreState, id: String) {
 #[tauri::command]
 fn save_clip(core: CoreState, seconds: u32) -> Result<(), String> {
     core.save_clip(seconds)
+}
+
+#[tauri::command]
+fn set_game_mode(core: CoreState, on: bool) {
+    core.set_game_mode(on);
 }
 
 #[tauri::command]
@@ -383,11 +389,20 @@ fn main() {
             ai_open_url,
             save_clip,
             set_replay_seconds,
+            set_game_mode,
             set_clip_look,
             open_clips,
             get_hotkeys,
             set_hotkeys
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running PhoneCast");
+        .build(tauri::generate_context!())
+        .expect("error while running PhoneCast")
+        .run(|app, event| {
+            // Closing PhoneCast puts the phone's screen size back.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(core) = app.try_state::<Arc<Core>>() {
+                    core.gamemode.restore();
+                }
+            }
+        });
 }

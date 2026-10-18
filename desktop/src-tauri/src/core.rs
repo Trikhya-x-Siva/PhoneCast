@@ -10,6 +10,7 @@ use crate::audio::{self, Mixer};
 use crate::capture::{self, PcInput, PcVideo, ScreenPreview, Source, SourceSettings};
 use crate::compositor::{layout, Base, Session};
 use crate::diag;
+use crate::gamemode::GameMode;
 use crate::hotkeys::{Action, Bindings, Hotkeys};
 use crate::live::{self, Live};
 use crate::mkv::VideoConfig;
@@ -132,6 +133,8 @@ pub struct Core {
     device_warnings: Mutex<Vec<String>>,
     /// End timestamp of the last audio chunk sent out (see `audio_in_order`).
     audio_end: Mutex<Option<i64>>,
+    /// 16:9 game mode (phone screen size while streaming over USB).
+    pub gamemode: Arc<GameMode>,
 }
 
 impl Core {
@@ -165,7 +168,11 @@ impl Core {
             hotkeys: Mutex::new(None),
             device_warnings: Mutex::new(Vec::new()),
             audio_end: Mutex::new(None),
+            gamemode: Arc::new(GameMode::new()),
         });
+        // A previous run may have left the phone in 16:9 (crash, power cut).
+        let gm = core.gamemode.clone();
+        std::thread::spawn(move || gm.recover());
 
         // Global hotkeys (work while the game has focus).
         let weak = Arc::downgrade(&core);
@@ -622,6 +629,9 @@ impl Core {
             i.clock.clear();
             diag::log("phone", format!("connected: {} via {}", i.device, i.remote));
         }
+        if remote == "127.0.0.1" && self.prefs.lock().unwrap().game_16x9 {
+            self.apply_game_mode();
+        }
 
         // Processing happens on its own thread; this one only reads the socket.
         let (tx, rx) = sync_channel::<(u8, u8, i64, Vec<u8>, i64)>(4096);
@@ -670,6 +680,8 @@ impl Core {
             *phone = None;
             drop(phone);
             diag::log("phone", "disconnected");
+            let gm = self.gamemode.clone();
+            std::thread::spawn(move || gm.restore());
             let mut i = self.inner.lock().unwrap();
             i.connected = false;
             i.latency_ms = None;
@@ -1184,6 +1196,11 @@ impl Core {
             "live": self.live.status_json(),
             "adb": adb,
             "replay": replay,
+            "gameMode": json!({
+                "enabled": self.prefs.lock().unwrap().game_16x9,
+                "active": self.gamemode.active(),
+                "note": self.gamemode.note(),
+            }),
             "deviceWarnings": self.device_warnings.lock().unwrap().clone(),
         })
     }
@@ -1255,6 +1272,38 @@ impl Core {
         p.clip_look = look.into();
         p.save();
         diag::log("clip", format!("clip picture: {look}"));
+    }
+
+    /// Switches the USB phone to 16:9 in the background (adb calls take ~1 s).
+    fn apply_game_mode(&self) {
+        let devices = self.adb.lock().unwrap().devices.clone();
+        let gm = self.gamemode.clone();
+        std::thread::spawn(move || match devices.as_slice() {
+            [serial] => gm.apply(serial),
+            [] => diag::log("gamemode", "no adb device: 16:9 game mode not applied"),
+            _ => diag::log(
+                "gamemode",
+                "several phones on USB: 16:9 game mode not applied (unplug the others)",
+            ),
+        });
+    }
+
+    pub fn set_game_mode(&self, on: bool) {
+        {
+            let mut p = self.prefs.lock().unwrap();
+            p.game_16x9 = on;
+            p.save();
+        }
+        let usb = {
+            let i = self.inner.lock().unwrap();
+            i.connected && i.remote == "USB"
+        };
+        if on && usb {
+            self.apply_game_mode();
+        } else if !on {
+            let gm = self.gamemode.clone();
+            std::thread::spawn(move || gm.restore());
+        }
     }
 
     pub fn set_replay_seconds(&self, seconds: u32) {

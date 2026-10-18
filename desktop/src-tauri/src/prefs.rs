@@ -28,6 +28,8 @@ pub struct Prefs {
     pub mic: Option<Device>,
     /// "auto", "discord" or a browser id.
     pub voice_app: String,
+    /// 16:9 game mode: set the phone's screen to 16:9 while streaming over USB.
+    pub game_16x9: bool,
 }
 
 impl Default for Prefs {
@@ -38,6 +40,7 @@ impl Default for Prefs {
             hotkeys: BTreeMap::new(),
             mic: None,
             voice_app: "auto".into(),
+            game_16x9: true,
         }
     }
 }

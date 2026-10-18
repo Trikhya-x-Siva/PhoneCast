@@ -271,6 +271,25 @@ function render(s) {
   renderLive(s.live);
   renderSource(s);
   renderReplay(s.replay);
+  renderGameMode(s.gameMode, s.pcMode);
+}
+
+// ---------------- 16:9 game mode ----------------
+let gameModeTouchedAt = 0;
+$("gameModeToggle").addEventListener("change", (e) => {
+  gameModeTouchedAt = performance.now();
+  invoke("set_game_mode", { on: e.target.checked });
+  toast(e.target.checked
+    ? "16:9 game mode on: the phone switches to 16:9 while streaming over USB"
+    : "16:9 game mode off: the phone keeps its own screen size");
+});
+function renderGameMode(g, pc) {
+  if (!g) return;
+  $("phoneOptions").classList.toggle("hidden", !!pc);
+  if (performance.now() - gameModeTouchedAt > 1500) $("gameModeToggle").checked = !!g.enabled;
+  $("gameModeHint").textContent = g.active && g.note
+    ? g.note
+    : "While you stream over USB, the phone's screen becomes 16:9 so the game fills the whole stream: no bars, crop, stretch or blur. Your phone's own setting comes back when you stop. Start the stream before opening the game.";
 }
 
 // ---------------- source: phone or this PC ----------------

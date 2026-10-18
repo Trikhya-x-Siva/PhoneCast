@@ -138,6 +138,10 @@
           <button data-v="phone"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>Phone</button>
           <button data-v="screen"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>This PC</button>
         </div>
+        <div id="phoneOptions" class="pc-options">
+          <label class="switch" style="margin:10px 0 6px"><input type="checkbox" id="gameModeToggle"><span class="track"><span class="knob"></span></span>16:9 game mode</label>
+          <p id="gameModeHint" class="hint">While you stream over USB, the phone's screen becomes 16:9 so the game fills the whole stream: no bars, crop, stretch or blur. Your phone's own setting comes back when you stop. Start the stream before opening the game.</p>
+        </div>
         <div id="pcOptions" class="pc-options hidden">
           <label class="field"><span>Capture</span>
             <div class="key-row"><select id="captureSelect"></select><button id="refreshWindows" class="mini" title="Refresh the list of open windows">&#x21bb;</button></div>
