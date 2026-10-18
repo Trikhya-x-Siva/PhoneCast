@@ -966,8 +966,8 @@ let currentScene = null;
 let wantedScene = null;
 let applying = false;
 async function prepareScene(name) {
-  const v = window.lastStatus && window.lastStatus.video;
-  if (!v) throw new Error("Start streaming on the phone first");
+  // Without the phone, scenes use its usual stream size (1920x872).
+  const v = (window.lastStatus && window.lastStatus.video) || { width: 1920, height: 872 };
   const spec = window.getBannerSpec();
   const design = window.bannerDesignKey();
   if (await invoke("scene_ready", { name, design })) return design;
@@ -1012,11 +1012,6 @@ for (const b of document.querySelectorAll(".scene")) {
     try {
       if (name) {
         wantedScene = name;
-        if (!(window.lastStatus && window.lastStatus.video)) {
-          toast(`${b.textContent} will show as soon as the phone starts streaming`);
-          renderScene(window.lastStatus || {});
-          return;
-        }
         const first = !(await invoke("scene_ready", { name, design: window.bannerDesignKey() }));
         if (first) toast("Preparing the scene (first time takes a few seconds)…");
         await showScene(name);
@@ -1035,7 +1030,7 @@ for (const b of document.querySelectorAll(".scene")) {
 }
 function renderScene(s) {
   // A wanted scene comes (back) on by itself once the phone streams.
-  if (wantedScene && !s.scene && s.video && !applying) {
+  if (wantedScene && !s.scene && !applying) {
     showScene(wantedScene).catch((e) => toast(String(e.message || e)));
   }
   const on = s.scene === "stinger" ? null : s.scene || wantedScene || null;
@@ -1043,6 +1038,19 @@ function renderScene(s) {
   currentScene = on;
   for (const b of document.querySelectorAll(".scene")) b.classList.toggle("on", (b.dataset.scene || null) === on && !!on);
 }
+
+// Scene music: played instead of the game sound while a scene is on.
+$("sceneMusic").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    toast("Loading the scene music…");
+    const secs = await invoke("set_scene_music", new Uint8Array(await f.arrayBuffer()));
+    toast(`Scene music ready (${Math.round(secs)} s, loops)`);
+  } catch (err) {
+    toast(String(err));
+  }
+});
 
 // Short messages from the app itself: clip saved, hotkey pressed, problems.
 listen("notice", (e) => toast(e.payload.text));

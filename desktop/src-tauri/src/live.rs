@@ -517,6 +517,11 @@ pub struct Dest {
     pub stop: Arc<AtomicBool>,
 }
 
+/// Set while the stream's settings are being switched live: jobs then end
+/// by dropping the connection (no RTMP "unpublish"), so YouTube and the
+/// others keep the broadcast open and the new encoders reconnect into it.
+static SWITCHING: AtomicBool = AtomicBool::new(false);
+
 pub struct Live {
     settings: Mutex<LiveSettings>,
     dests: Mutex<Vec<Dest>>,
@@ -869,6 +874,14 @@ impl Live {
         {
             std::thread::sleep(Duration::from_millis(100));
         }
+    }
+
+    /// Ends every job without signing off (see `SWITCHING`) and waits for
+    /// them, so new ones can start on the same stream keys right away.
+    pub fn stop_for_switch(&self) {
+        SWITCHING.store(true, Ordering::SeqCst);
+        self.stop_and_wait(Duration::from_secs(5));
+        SWITCHING.store(false, Ordering::SeqCst);
     }
 
     pub fn stop(&self) {
@@ -1392,7 +1405,7 @@ impl Job {
                 };
                 let ok = match (&m, w) {
                     (Media::Config(c), Feed::Mkv(_)) => {
-                        if *c != config {
+                        if !c.same_shape(&config) {
                             // Rotation: the stream must restart at the new size.
                             config = c.clone();
                             restart_for_config = true;
@@ -1414,6 +1427,15 @@ impl Job {
                 }
             }
 
+            if SWITCHING.load(Ordering::SeqCst) && (sender_gone || stop.load(Ordering::SeqCst)) {
+                // Switching settings live: cut the connection without signing
+                // off, so the platform waits for the new encoder.
+                child.kill().ok();
+                child.wait().ok();
+                drop(writer.take());
+                crate::diag::log("live", format!("{name}: switching settings"));
+                break;
+            }
             let graceful = sender_gone || stop.load(Ordering::SeqCst);
             if graceful {
                 // Composited video arrives on a pipe that never ends by

@@ -119,6 +119,31 @@ impl SceneState {
     }
 }
 
+/// The parameter sets (VPS/SPS/PPS) at the start of a keyframe, i.e. the
+/// codec setup a stream that starts on this scene announces.
+pub fn codec_setup(keyframe: &[u8], hevc: bool) -> Vec<u8> {
+    let mut i = 0;
+    while i + 4 <= keyframe.len() {
+        if keyframe[i] == 0 && keyframe[i + 1] == 0 && keyframe[i + 2] == 1 {
+            let b = keyframe[i + 3];
+            let ty = if hevc { (b >> 1) & 0x3f } else { b & 0x1f };
+            let slice = if hevc { ty < 32 } else { (1..=5).contains(&ty) };
+            if slice {
+                let s = if i > 0 && keyframe[i - 1] == 0 {
+                    i - 1
+                } else {
+                    i
+                };
+                return keyframe[..s].to_vec();
+            }
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    Vec::new()
+}
+
 pub fn scenes_dir() -> PathBuf {
     crate::live::banner_path().with_file_name("scenes")
 }

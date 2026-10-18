@@ -418,6 +418,8 @@
   });
 
   window.openModal = () => {
+    const live = !!(window.lastStatus && window.lastStatus.live && window.lastStatus.live.active);
+    $("liveStart").textContent = live ? "Apply now" : "Start streaming";
     invoke("get_live_settings").then(fill);
     modal.classList.remove("hidden");
   };
@@ -446,16 +448,26 @@
   $("liveStart").onclick = async () => {
     const btn = $("liveStart");
     btn.disabled = true;
+    const live = !!(window.lastStatus && window.lastStatus.live && window.lastStatus.live.active);
     try {
       await save();
-      await invoke("start_live");
-      closeModal();
-      toast("Going live…");
+      if (live) {
+        toast("Applying the new settings: viewers see a 2-3 second pause, the stream keeps going");
+        closeModal();
+        await invoke("apply_live_now");
+        toast("New settings are live");
+      } else {
+        await invoke("start_live");
+        closeModal();
+        toast("Going live…");
+      }
     } catch (e) {
       toast(String(e));
+    } finally {
       btn.disabled = false;
     }
   };
+  $("liveEdit").onclick = () => window.openModal();
   $("liveSetup").onclick = () => openSetup();
   $("liveBtn").onclick = async () => {
     if (isLive) {

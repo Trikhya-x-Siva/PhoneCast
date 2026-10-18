@@ -139,6 +139,19 @@ pub struct Core {
     scene: Mutex<crate::scenes::SceneState>,
     /// Prepared scenes by key (scene name + design + phone size + codec).
     scene_cache: Mutex<std::collections::HashMap<String, Arc<Vec<crate::scenes::Frame>>>>,
+    /// Codec setup of each prepared scene (to start a stream on a scene).
+    scene_cfgs: Mutex<std::collections::HashMap<String, VideoConfig>>,
+    /// Config the outputs were given while a scene runs the stream without
+    /// the phone.
+    scene_cfg: Mutex<Option<VideoConfig>>,
+    /// The phone's new config arrived during a scene: given to the outputs
+    /// when the game comes back.
+    pending_phone_cfg: Mutex<bool>,
+    /// When the last phone video frame arrived (the scene clock takes over
+    /// when the phone is quiet).
+    last_phone_frame: Mutex<Option<Instant>>,
+    /// Offset used before the first clock sync reply (phone - PC, us).
+    provisional_offset: Mutex<Option<i64>>,
     /// 16:9 game mode (phone screen size while streaming over USB).
     pub gamemode: Arc<GameMode>,
 }
@@ -176,6 +189,11 @@ impl Core {
             audio_end: Mutex::new(None),
             scene: Mutex::new(Default::default()),
             scene_cache: Mutex::new(Default::default()),
+            scene_cfgs: Mutex::new(Default::default()),
+            scene_cfg: Mutex::new(None),
+            pending_phone_cfg: Mutex::new(false),
+            last_phone_frame: Mutex::new(None),
+            provisional_offset: Mutex::new(None),
             gamemode: Arc::new(GameMode::new()),
         });
         // A previous run may have left the phone in 16:9 (crash, power cut).
@@ -250,6 +268,17 @@ impl Core {
         std::thread::Builder::new()
             .name("mix-clock".into())
             .spawn(move || c.mix_clock())?;
+
+        let c = core.clone();
+        std::thread::Builder::new()
+            .name("scene-clock".into())
+            .spawn(move || c.scene_clock())?;
+        let c = core.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = c.load_scene_music() {
+                diag::log("scene", e);
+            }
+        });
 
         // Monitors/webcams list (spawns ffmpeg once) and the saved source.
         let c = core.clone();
@@ -532,6 +561,70 @@ impl Core {
         self.start.elapsed().as_micros() as i64
     }
 
+    /// Phone timestamp -> PC clock. Every output runs on the PC clock, so a
+    /// scene can run the stream before the phone joins and the phone can
+    /// join (or reconnect) without a jump in time.
+    fn to_pc_clock(&self, phone_pts: i64) -> i64 {
+        let synced = self.inner.lock().unwrap().clock_offset().map(|(o, _)| o);
+        let offset = synced.unwrap_or_else(|| {
+            *self
+                .provisional_offset
+                .lock()
+                .unwrap()
+                .get_or_insert(phone_pts - self.now_us())
+        });
+        phone_pts - offset
+    }
+
+    /// Runs a scene as the stream's video when the phone sends none (not
+    /// connected yet, or reconnecting): 60 fps on the PC clock.
+    fn scene_clock(&self) {
+        const FRAME_US: i64 = 16_667;
+        let epoch = self.now_us();
+        let mut n: i64 = 0;
+        let mut announced = false;
+        loop {
+            std::thread::sleep(Duration::from_millis(3));
+            let due = (self.now_us() - epoch) / FRAME_US;
+            if due - n > 30 {
+                n = due - 1;
+            }
+            while n < due {
+                n += 1;
+                let phone_quiet = self
+                    .last_phone_frame
+                    .lock()
+                    .unwrap()
+                    .is_none_or(|t| t.elapsed() > Duration::from_millis(300));
+                let mut sc = self.scene.lock().unwrap();
+                if matches!(*sc, crate::scenes::SceneState::Off)
+                    || !phone_quiet
+                    || self.is_pc_mode()
+                {
+                    announced = false;
+                    continue;
+                }
+                if !self.has_outputs() {
+                    continue;
+                }
+                let (key, data) = sc.substitute(false, Arc::new(Vec::new()), &[]);
+                drop(sc);
+                if !announced {
+                    let cfg = self.inner.lock().unwrap().phone_video.clone();
+                    if let Some(cfg) = cfg.or_else(|| self.scene_cfg.lock().unwrap().clone()) {
+                        self.dispatch(Media::Config(cfg));
+                    }
+                    announced = true;
+                }
+                self.dispatch(Media::Video {
+                    pts: epoch + n * FRAME_US,
+                    key,
+                    data,
+                });
+            }
+        }
+    }
+
     fn has_outputs(&self) -> bool {
         self.has_outputs_running() || self.replay.lock().unwrap().enabled()
     }
@@ -565,25 +658,20 @@ impl Core {
             while produced < due {
                 produced += 1;
                 let pc = self.is_pc_mode();
-                let offset = {
-                    let i = self.inner.lock().unwrap();
-                    if !i.connected && !pc {
-                        continue;
-                    }
-                    // PC mode without a phone runs on the PC clock.
-                    i.clock_offset()
-                        .map(|(o, _)| o)
-                        .or(if pc { Some(0) } else { None })
-                };
+                let scene = !matches!(*self.scene.lock().unwrap(), crate::scenes::SceneState::Off);
+                if !self.inner.lock().unwrap().connected && !pc && !scene {
+                    continue;
+                }
                 if !self.has_outputs() {
                     continue;
                 }
-                let (Some(offset), Some(pcm)) = (offset, self.mixer.mix_without_game()) else {
+                let Some(pcm) = self.mixer.mix_without_game() else {
                     continue;
                 };
-                // Timestamp of this chunk on the steady 10 ms grid, matched to
-                // the PC sources' ~40 ms buffer.
-                let pts = epoch_us + produced * CHUNK_US + offset - 40_000;
+                // Everything runs on the PC clock (phone timestamps are
+                // converted on arrival). The 10 ms grid, matched to the PC
+                // sources' ~40 ms buffer.
+                let pts = epoch_us + produced * CHUNK_US - 40_000;
                 self.dispatch(Media::Audio {
                     pts,
                     pcm: Arc::new(pcm),
@@ -638,6 +726,7 @@ impl Core {
                 format!("Wi-Fi ({remote})")
             };
             i.clock.clear();
+            *self.provisional_offset.lock().unwrap() = None;
             diag::log("phone", format!("connected: {} via {}", i.device, i.remote));
         }
         // 16:9 game mode is no longer applied (the user's phone stretched it);
@@ -722,10 +811,18 @@ impl Core {
                             ),
                         );
                     }
-                    if i.phone_video.as_ref().is_some_and(|old| old != &cfg) {
-                        *self.scene.lock().unwrap() = Default::default();
-                    }
+                    let scene_on =
+                        !matches!(*self.scene.lock().unwrap(), crate::scenes::SceneState::Off);
                     i.phone_video = Some(cfg.clone());
+                    if scene_on && !self.is_pc_mode() {
+                        // The scene keeps the stream; the phone's setup goes
+                        // out when the game comes back (no output restart).
+                        i.video = Some(cfg.clone());
+                        *self.pending_phone_cfg.lock().unwrap() = true;
+                        drop(i);
+                        self.broadcast(ty, flags, pts, &payload);
+                        return;
+                    }
                     if self.is_pc_mode() {
                         return; // PC screen is the source; keep the phone's config for later
                     }
@@ -754,6 +851,8 @@ impl Core {
                 // The preview keeps showing the game; the outputs get the
                 // scene while one is on.
                 self.broadcast(ty, flags, pts, &payload);
+                *self.last_phone_frame.lock().unwrap() = Some(Instant::now());
+                let pts = self.to_pc_clock(pts);
                 let (key, data) = {
                     let mut sc = self.scene.lock().unwrap();
                     if matches!(*sc, crate::scenes::SceneState::Off) {
@@ -768,9 +867,19 @@ impl Core {
                             .map(|v| v.csd.clone())
                             .unwrap_or_default();
                         let f = sc.substitute(key, Arc::new(payload), &csd);
+                        let back = matches!(*sc, crate::scenes::SceneState::Off);
                         if sc.wants_keyframe() {
                             drop(sc);
                             self.request_keyframe();
+                        }
+                        if back {
+                            self.mixer.set_scene_audio(false);
+                            if std::mem::take(&mut *self.pending_phone_cfg.lock().unwrap()) {
+                                let cfg = self.inner.lock().unwrap().phone_video.clone();
+                                if let Some(cfg) = cfg {
+                                    self.dispatch(Media::Config(cfg));
+                                }
+                            }
                         }
                         f
                     }
@@ -788,6 +897,7 @@ impl Core {
                 }
                 // Game + Discord + mic, mixed on the game audio's timeline.
                 let mixed = self.mixer.mix_game(&payload);
+                let pts = self.to_pc_clock(pts);
                 self.dispatch(Media::Audio {
                     pts,
                     pcm: Arc::new(mixed),
@@ -907,6 +1017,9 @@ impl Core {
     /// frames after it, so a flood of them pixelated the whole stream (395 in
     /// 5 minutes). The preview simply waits for the next one otherwise.
     pub fn request_keyframe_for_preview(&self) -> bool {
+        if self.has_outputs_running() {
+            return false;
+        }
         static LAST: Mutex<Option<Instant>> = Mutex::new(None);
         let mut last = LAST.lock().unwrap();
         if last.is_some_and(|t| t.elapsed() < Duration::from_secs(5)) {
@@ -1051,11 +1164,21 @@ impl Core {
     // ---------------- live ----------------
 
     pub fn start_live(self: &Arc<Self>) -> Result<(), String> {
+        // A scene on screen restarts from its keyframe so the new stream can
+        // begin at once.
+        if let crate::scenes::SceneState::On { next, .. } = &mut *self.scene.lock().unwrap() {
+            *next = 0;
+        }
         let pc = self.pc_video();
         let config = if pc.is_some() {
             None
         } else {
-            self.inner.lock().unwrap().phone_video.clone()
+            self.inner
+                .lock()
+                .unwrap()
+                .phone_video
+                .clone()
+                .or_else(|| self.scene_cfg.lock().unwrap().clone())
         };
         let c = self.clone();
         self.live.start(
@@ -1065,6 +1188,18 @@ impl Core {
                 c.request_keyframe_limited("live stream needs a keyframe");
             }),
         )
+    }
+
+    /// Applies changed Go live settings (quality, framing, platforms) while
+    /// live: the encoders restart in 2-3 s and reconnect to the same
+    /// broadcast; viewers see a short pause instead of the stream ending.
+    pub fn switch_live(self: &Arc<Self>) -> Result<(), String> {
+        if !self.live.is_live() {
+            return Ok(());
+        }
+        diag::log("live", "applying new settings while live");
+        self.live.stop_for_switch();
+        self.start_live()
     }
 
     pub fn stop_live(&self) {
@@ -1108,7 +1243,9 @@ impl Core {
             }
         });
         drop(clients);
-        if want_key {
+        // While live or recording the preview just waits for the next
+        // keyframe (2 s at most): forced keyframes cost the stream quality.
+        if want_key && !self.has_outputs_running() {
             self.request_keyframe_limited("preview fell behind");
         }
     }
@@ -1247,6 +1384,7 @@ impl Core {
             "adb": adb,
             "replay": replay,
             "scene": self.scene.lock().unwrap().name(),
+            "sceneMusic": self.mixer.has_scene_music(),
             "gameMode": json!({
                 "enabled": self.prefs.lock().unwrap().game_16x9,
                 "active": self.gamemode.active(),
@@ -1448,6 +1586,63 @@ impl Core {
         self.send_phone(SET_MIC, &[self.mixer.uses_phone_mic() as u8]);
     }
 
+    /// The scene music file (any audio FFmpeg reads), kept next to settings.
+    pub fn scene_music_path() -> std::path::PathBuf {
+        crate::live::banner_path().with_file_name("scene_music.audio")
+    }
+
+    /// Decodes the scene music to 48 kHz stereo and gives it to the mixer.
+    pub fn load_scene_music(&self) -> Result<f64, String> {
+        let path = Self::scene_music_path();
+        if !path.exists() {
+            return Ok(0.0);
+        }
+        let ffmpeg = self
+            .live
+            .ffmpeg()
+            .ok_or("FFmpeg is not installed on this PC")?;
+        let mut cmd = std::process::Command::new(ffmpeg);
+        cmd.args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&path)
+            // Up to 10 minutes, a little quieter than game sound.
+            .args([
+                "-t",
+                "600",
+                "-af",
+                "volume=0.6",
+                "-f",
+                "f32le",
+                "-ac",
+                "2",
+                "-ar",
+                "48000",
+                "-",
+            ]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        let out = cmd.output().map_err(|e| e.to_string())?;
+        if !out.status.success() || out.stdout.len() < 8 {
+            return Err(format!(
+                "could not read that music file: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        let samples: Vec<f32> = out
+            .stdout
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect();
+        let secs = samples.len() as f64 / 96_000.0;
+        self.mixer.set_scene_music(samples);
+        diag::log("scene", format!("scene music loaded: {secs:.0} s"));
+        Ok(secs)
+    }
+
     /// Key of a prepared scene for the phone's current picture.
     fn scene_key(
         &self,
@@ -1457,13 +1652,19 @@ impl Core {
         if self.is_pc_mode() {
             return Err("Scenes work with the phone source for now".into());
         }
+        // Without the phone, scenes use the phone's usual stream size.
         let cfg = self
             .inner
             .lock()
             .unwrap()
             .phone_video
             .clone()
-            .ok_or("Start streaming on the phone first")?;
+            .unwrap_or(VideoConfig {
+                codec: crate::mkv::CODEC_H264,
+                width: 1920,
+                height: 872,
+                csd: Vec::new(),
+            });
         let key = format!("{name}-{design}-{}x{}-{}", cfg.width, cfg.height, cfg.codec);
         Ok((key, cfg))
     }
@@ -1507,6 +1708,11 @@ impl Core {
                 started.elapsed().as_millis()
             ),
         );
+        let setup = crate::scenes::codec_setup(&frames[0].1, hevc);
+        self.scene_cfgs
+            .lock()
+            .unwrap()
+            .insert(key.clone(), VideoConfig { csd: setup, ..cfg });
         self.scene_cache
             .lock()
             .unwrap()
@@ -1532,6 +1738,13 @@ impl Core {
                     frames,
                     next: 0,
                 };
+                // Without the phone the scene runs the stream on its own setup.
+                let phone = self.inner.lock().unwrap().phone_video.is_some();
+                if !phone {
+                    *self.scene_cfg.lock().unwrap() =
+                        self.scene_cfgs.lock().unwrap().get(&key).cloned();
+                }
+                self.mixer.set_scene_audio(true);
                 diag::log("scene", format!("showing {n}"));
             }
             None => {

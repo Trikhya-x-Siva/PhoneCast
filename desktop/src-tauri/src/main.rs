@@ -267,6 +267,25 @@ fn prepare_scene(core: CoreState, request: tauri::ipc::Request<'_>) -> Result<()
     core.prepare_scene(&h("x-name"), &h("x-design"), &frames, hold)
 }
 
+/// Saves the scene music (the file's bytes as the body) and loads it.
+#[tauri::command(async)]
+fn set_scene_music(core: CoreState, request: tauri::ipc::Request<'_>) -> Result<f64, String> {
+    let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
+        return Err("expected the music file".into());
+    };
+    if body.len() > 200 << 20 {
+        return Err("That music file is too big (200 MB max)".into());
+    }
+    let path = crate::core::Core::scene_music_path();
+    if body.is_empty() {
+        std::fs::remove_file(&path).ok();
+        core.mixer.set_scene_music(Vec::new());
+        return Ok(0.0);
+    }
+    std::fs::write(&path, body).map_err(|e| e.to_string())?;
+    core.load_scene_music()
+}
+
 #[tauri::command]
 fn scene_ready(core: CoreState, name: String, design: String) -> bool {
     core.scene_ready(&name, &design)
@@ -332,6 +351,12 @@ fn get_live_settings(core: CoreState) -> Value {
 fn save_live_settings(core: CoreState, settings: Value) -> Result<Value, String> {
     core.live.update_settings(&settings)?;
     Ok(core.live.settings_json())
+}
+
+/// While live: apply the saved settings now (2-3 s pause, same broadcast).
+#[tauri::command(async)]
+fn apply_live_now(core: CoreState) -> Result<(), String> {
+    core.inner().clone().switch_live()
 }
 
 /// Validates an unsaved Go live edit: platform limits + upload budget.
@@ -624,8 +649,10 @@ fn main() {
             set_replay_seconds,
             set_game_mode,
             save_banner,
+            apply_live_now,
             save_banner_frames,
             prepare_scene,
+            set_scene_music,
             scene_ready,
             set_scene,
             get_banner,

@@ -100,7 +100,7 @@ pub fn spawn_recorder(
             while let Ok(m) = rx.recv() {
                 let Some(w) = writer.as_mut() else { continue };
                 let res = match &m {
-                    Media::Config(c) if *c != cfg => {
+                    Media::Config(c) if !c.same_shape(&cfg) => {
                         part += 1;
                         cfg = c.clone();
                         path = part_path(&first_path, part);

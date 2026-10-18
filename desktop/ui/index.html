@@ -169,7 +169,8 @@
           <button class="btn ghost scene" data-scene="thanks">Thanks for watching</button>
           <button class="btn ghost scene game" data-scene="">Back to game</button>
         </div>
-        <p class="hint" id="sceneHint">Shows your avatar scene instead of the game, on stream and in recordings, without reconnecting. Your banner stays underneath.</p>
+        <label class="field" style="margin-top:10px"><span>Scene music (plays instead of game sound)</span><input id="sceneMusic" type="file" accept="audio/*"></label>
+        <p class="hint" id="sceneHint">Shows your avatar scene instead of the game, on stream and in recordings, without reconnecting. Works before the phone is connected, so you can go live on Starting soon. Your mic stays on; your banner stays underneath.</p>
       </div>
 
       <div class="card">
@@ -202,6 +203,7 @@
       <div id="liveCard" class="card live-card hidden">
         <h3>Live</h3>
         <div id="liveDests"></div>
+        <button class="btn ghost" id="liveEdit" style="margin-top:10px;width:100%">Change quality or picture</button>
       </div>
 
       <div class="card">

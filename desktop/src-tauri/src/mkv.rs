@@ -21,6 +21,15 @@ pub struct VideoConfig {
     pub csd: Vec<u8>,
 }
 
+impl VideoConfig {
+    /// Same codec and size: a new codec setup (SPS/PPS) alone does not need
+    /// an output restart, because the frames carry it in-band when it
+    /// changes (scenes <-> phone).
+    pub fn same_shape(&self, o: &VideoConfig) -> bool {
+        self.codec == o.codec && self.width == o.width && self.height == o.height
+    }
+}
+
 pub struct MkvWriter<W: Write = BufWriter<File>> {
     out: W,
     /// Live mode: every block is flushed immediately (for feeding FFmpeg).

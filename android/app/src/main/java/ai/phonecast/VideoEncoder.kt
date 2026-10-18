@@ -66,8 +66,10 @@ class VideoEncoder(
                 // Keep sending frames on a static screen so the PC never stalls.
                 setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
             }
-            // Keyframes are also sent on demand (new viewer, packet loss).
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 5)
+            // A keyframe every 2 s (like the stream itself): the preview,
+            // clips and scenes catch up on these instead of asking for extra
+            // ones, which cost the stream quality.
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
             // 0 = realtime priority.
             setInteger(MediaFormat.KEY_PRIORITY, 0)
             setInteger(MediaFormat.KEY_LATENCY, 1)

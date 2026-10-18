@@ -138,6 +138,11 @@ struct State {
     limiter: f32,
     /// Last chunk from the phone's mic.
     phone_mic_at: Option<Instant>,
+    /// A scene is on: game sound is replaced by the scene music.
+    scene_audio: bool,
+    /// Scene music, 48 kHz stereo f32 interleaved, looped.
+    scene_music: Arc<Vec<f32>>,
+    music_pos: usize,
     /// Voice leveler gain for the mic (see `level_voice`).
     voice_gain: f32,
     last_game_audio: Option<Instant>,
@@ -191,6 +196,9 @@ impl Mixer {
                 duck: 1.0,
                 limiter: 1.0,
                 phone_mic_at: None,
+                scene_audio: false,
+                scene_music: Arc::new(Vec::new()),
+                music_pos: 0,
                 voice_gain: 2.0,
                 last_game_audio: None,
                 ai_tap: AiTap::default(),
@@ -266,6 +274,26 @@ impl Mixer {
     }
 
     fn mix(s: &mut State, game: &[f32]) -> Vec<u8> {
+        // During a scene the game sound is replaced by the scene music (or
+        // silence); Discord and the mic stay.
+        let music: Vec<f32>;
+        let game: &[f32] = if s.scene_audio {
+            let m = s.scene_music.clone();
+            music = if m.is_empty() {
+                vec![0.0; game.len()]
+            } else {
+                (0..game.len())
+                    .map(|_| {
+                        let v = m[s.music_pos % m.len()];
+                        s.music_pos = (s.music_pos + 1) % m.len();
+                        v
+                    })
+                    .collect()
+            };
+            &music
+        } else {
+            game
+        };
         let n = game.len();
         let take = |c: &mut Channel| -> Vec<f32> {
             let mut v: Vec<f32> = c.fifo.drain(..n.min(c.fifo.len())).collect();
@@ -362,6 +390,26 @@ impl Mixer {
         };
         s.mic_missing = false;
         s.mic_generation += 1;
+    }
+
+    /// Scene on/off: game sound is swapped for the scene music.
+    pub fn set_scene_audio(&self, on: bool) {
+        let mut s = self.state.lock().unwrap();
+        if s.scene_audio != on {
+            s.scene_audio = on;
+            s.music_pos = 0;
+        }
+    }
+
+    /// Scene music, 48 kHz stereo f32 interleaved.
+    pub fn set_scene_music(&self, samples: Vec<f32>) {
+        let mut s = self.state.lock().unwrap();
+        s.scene_music = Arc::new(samples);
+        s.music_pos = 0;
+    }
+
+    pub fn has_scene_music(&self) -> bool {
+        !self.state.lock().unwrap().scene_music.is_empty()
     }
 
     /// True when the phone's own mic is the chosen mic.
