@@ -55,17 +55,22 @@ from a phone or a PC. Every change is judged against this list:
 - Live preview with pacing, health stats, phone battery/temperature.
 - Diagnostics log (`%APPDATA%\PhoneCast\logs`) for "it got stuck" reports.
 
+## Done (v0.2, in progress)
+- **Window capture** of one app via Windows Graphics Capture, with a window
+  picker (title + app name).
+- **PC game capture** of borderless/windowed games via WGC, with the limits
+  (exclusive fullscreen, anti-cheat, minimised) stated in the Source panel.
+- **Overlays**: PNG images and text, plus the webcam, composed on the GPU and
+  placed by dragging on the preview.
+
 ## v0.2 — PC streaming (next)
 The most-requested capture features, built on GPU-only paths:
 - **Screen capture** of a monitor (Desktop Duplication / Windows Graphics
   Capture) straight into NVENC — no CPU copies.
-- **Window capture** of one app via Windows Graphics Capture.
-- **PC game capture**: borderless and most fullscreen games via WGC; known
-  limits (exclusive fullscreen on some titles, HDR, anti-cheat) documented
-  plainly in the UI rather than failing silently (OBS issues #13337, #14021).
 - **Webcam** as a picture-in-picture source with position/size presets.
-- **Overlays**: images (PNG) and text; **browser sources** for alerts and
-  chat widgets (StreamElements, etc.).
+- **Browser sources** for alerts and chat widgets (StreamElements, etc.).
+- **HDR games**: tone-map Rgba16F captures to SDR (WGC delivers them today
+  but they look washed out).
 - **Scenes**: a few named layouts (Game, Game + cam, Be right back) with a
   hotkey each; hotkeys work while the game has focus (OBS #4126, #10701).
 - **PC audio**: capture any app's sound separately (game, music, Discord)

@@ -20,7 +20,21 @@ nnnoiseless = { version = "0.5", default-features = false }
 [target.'cfg(windows)'.dependencies]
 # Mic + per-app (Discord) audio capture
 wasapi = "0.26"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_Security_Cryptography", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_Security_Cryptography",
+  "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Pipes", "Win32_System_IO", "Win32_Storage_FileSystem",
+  "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_UI_Controls_Dialogs",
+] }
+# Window / game capture (Windows Graphics Capture) and the D3D11 compositor
+windows-capture = "2.0.1"
+windows = { version = "0.62", features = [
+  "Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite",
+] }
+windows-numerics = "0.3"
+# PNG overlays
+png = "0.17"
 
 [profile.release]
 opt-level = 3

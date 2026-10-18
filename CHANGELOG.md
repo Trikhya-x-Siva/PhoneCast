@@ -14,6 +14,13 @@ versions follow [SemVer](https://semver.org).
   FAQ answers from your own `faq.yaml`, posted only on `!ask` or after you
   click Post, optionally reworded by a 1.1 GB local model. Models download
   only when you switch them on and are SHA-256 checked; CPU/RAM use is shown.
+- **Window and game capture**: stream one window (a game, an emulator such
+  as BlueStacks for BGMI, a browser) through Windows Graphics Capture, even
+  with other windows in front. The window picker lists open windows with
+  their app name and finds the same app again after a restart.
+- **Overlays**: add PNG images (your logo) and text, drag them into place
+  and resize them right on the preview; the webcam can be dragged too.
+  Composed on the GPU in Direct3D 11 and changed live, even while streaming.
 - **PC streaming**: capture a monitor on the GPU (Desktop Duplication →
   NVENC, zero-copy at native size), optional webcam picture-in-picture, PC
   sound in the mixer with Discord kept separate; record and go live from
@@ -25,6 +32,11 @@ versions follow [SemVer](https://semver.org).
 - Discord voice can be captured from a browser (Chrome, Edge, Firefox,
   Brave, Opera) as well as the Discord app, with a source picker.
 - Public roadmap, contributing guide and security policy.
+
+### Fixed
+- PC-mode recordings were nearly empty (no audio reached the recorder, so
+  FFmpeg never started writing). Stopping a window-capture recording or
+  stream now ends FFmpeg cleanly, so files are finished instead of cut off.
 
 ## [0.1.0] - 2026-10-17
 ### Added
