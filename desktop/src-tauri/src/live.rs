@@ -1174,7 +1174,13 @@ impl Job {
                     "reconnecting".into()
                 };
             });
-            watch_progress(child.stderr.take().unwrap(), status.clone(), !self.file);
+            let spec = self.spec();
+            watch_progress(
+                child.stderr.take().unwrap(),
+                status.clone(),
+                !self.file,
+                (spec.kbps + spec.audio.kbps) as f64,
+            );
             let stdin = BufWriter::with_capacity(1 << 20, child.stdin.take().unwrap());
             let mut writer = if self.pc.is_some() {
                 Some(Feed::Pcm(stdin))
@@ -1314,10 +1320,14 @@ fn finish(child: &mut Child, w: Option<Feed>, graceful: bool) {
 /// frames alone don't prove the stream is on air: a network job counts as
 /// live after 3 s of frames without a connection error, or as soon as the
 /// fifo reports "Recovery successful".
+/// `target_kbps`: the job's constant bitrate (video + audio). FFmpeg's fifo
+/// muxer hides the output size, so its `bitrate` reads "N/A" for network
+/// outputs; the card then shows the CBR target instead of a false 0.
 fn watch_progress(
     stderr: std::process::ChildStderr,
     status: Arc<Mutex<DestStatus>>,
     network: bool,
+    target_kbps: f64,
 ) {
     std::thread::spawn(move || {
         let mut last_frame = 0u64;
@@ -1343,11 +1353,11 @@ fn watch_progress(
                             last_frame = f;
                         }
                         "fps" => s.fps = v.parse().unwrap_or(0.0),
-                        "bitrate" => {
-                            if let Ok(k) = v.trim_end_matches("kbits/s").trim().parse() {
-                                s.kbps = k;
-                            }
-                        }
+                        "bitrate" => match v.trim_end_matches("kbits/s").trim().parse::<f64>() {
+                            Ok(k) if k > 0.0 => s.kbps = k,
+                            _ if last_frame > 0 => s.kbps = target_kbps,
+                            _ => {}
+                        },
                         "drop_frames" => s.dropped = v.parse().unwrap_or(0),
                         "speed" => s.speed = v.trim_end_matches('x').trim().parse().unwrap_or(0.0),
                         _ => {}
@@ -2377,10 +2387,19 @@ mod tests {
             let (mut tx, rx) = SinkTx::new(800);
             let (st, sp) = (status.clone(), stop.clone());
             let t = std::thread::spawn(move || job.run(rx, cfg, Arc::new(|| {}), st, sp));
-            // Feed 4 s in real time: 60 fps video + 10 ms audio chunks.
+            // Feed the sample twice (8 s) in real time: 60 fps video + 10 ms
+            // audio chunks. Network outputs only count as live after 3 s of
+            // error-free frames, so 4 s was too short to see it.
             let start = Instant::now();
             let mut audio_t = 0i64;
-            for (i, (key, au)) in aus.iter().filter(|a| !a.1.is_empty()).enumerate() {
+            let frames: Vec<&(bool, Vec<u8>)> = aus.iter().filter(|a| !a.1.is_empty()).collect();
+            for (i, (key, au)) in frames
+                .iter()
+                .chain(frames.iter())
+                .map(|a| (a.0, &a.1))
+                .enumerate()
+            {
+                let key = &key;
                 let pts = 1_000_000 + i as i64 * 16_667;
                 tx.push(&Media::Video {
                     pts,
