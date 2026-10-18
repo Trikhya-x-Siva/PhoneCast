@@ -214,40 +214,56 @@ class MainActivity : Activity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(px(20), px(28), px(20), px(20))
+            setPadding(px(20), px(32), px(20), px(24))
             setBackgroundColor(BG)
         }
 
+        // Rounded card surface with a hairline border (PhantomBlitz palette).
+        fun card(radius: Int) = GradientDrawable().apply {
+            cornerRadius = px(radius).toFloat(); setColor(CARD); setStroke(px(1), LINE)
+        }
+
         root.addView(TextView(this).apply {
-            text = "PhoneCast"
-            textSize = 26f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE)
+            text = "OSSG"
+            textSize = 30f
+            letterSpacing = 0.04f
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD))
+            setTextColor(TEXT)
+            paint.shader = android.graphics.LinearGradient(0f, 0f, px(90).toFloat(), 0f,
+                Color.parseColor("#C4B5FD"), Color.parseColor("#67E8F9"), android.graphics.Shader.TileMode.CLAMP)
         })
         root.addView(TextView(this).apply {
-            text = "Stream your games to the PhoneCast PC app"
+            text = "Open Source Streaming for Gaming"
             setTextColor(MUTED)
-            setPadding(0, px(2), 0, px(18))
+            textSize = 13f
+            letterSpacing = 0.02f
+            setPadding(0, px(2), 0, px(20))
         })
 
         statusView = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            setPadding(px(14), px(12), px(14), px(12))
-            background = GradientDrawable().apply { cornerRadius = px(12).toFloat(); setColor(CARD) }
+            setTextColor(TEXT)
+            textSize = 14f
+            setLineSpacing(0f, 1.2f)
+            setPadding(px(16), px(14), px(16), px(14))
+            background = card(16)
         }
         root.addView(statusView, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
 
         fun label(t: String) = root.addView(TextView(this).apply {
             text = t
             setTextColor(MUTED)
-            textSize = 13f
-            setPadding(0, px(16), 0, px(4))
+            textSize = 12f
+            letterSpacing = 0.06f
+            isAllCaps = true
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(px(2), px(18), 0, px(6))
         })
 
         fun spinner(items: List<String>) = Spinner(this).apply {
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, items)
-            background = GradientDrawable().apply { cornerRadius = px(10).toFloat(); setColor(CARD) }
-            setPadding(px(8), px(6), px(8), px(6))
+            background = card(12)
+            setPadding(px(10), px(6), px(10), px(6))
+            setPopupBackgroundDrawable(GradientDrawable().apply { cornerRadius = px(12).toFloat(); setColor(CARD) })
             root.addView(this, LinearLayout.LayoutParams(MATCH_PARENT, px(48)))
         }
 
@@ -256,8 +272,10 @@ class MainActivity : Activity() {
         host = EditText(this).apply {
             hint = "PC address, e.g. 192.168.1.20"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            setTextColor(Color.WHITE)
+            setTextColor(TEXT)
             setHintTextColor(MUTED)
+            background = card(12)
+            setPadding(px(14), px(10), px(14), px(10))
         }
         wifiRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -265,10 +283,11 @@ class MainActivity : Activity() {
             addView(Button(this@MainActivity).apply {
                 text = "Find PC"
                 isAllCaps = false
-                setTextColor(Color.WHITE)
-                background = GradientDrawable().apply { cornerRadius = px(10).toFloat(); setColor(CARD) }
+                setTextColor(CYAN)
+                setTypeface(typeface, Typeface.BOLD)
+                background = card(12)
                 setOnClickListener { findPc() }
-            }, LinearLayout.LayoutParams(WRAP_CONTENT, px(44)).apply { marginStart = px(8) })
+            }, LinearLayout.LayoutParams(WRAP_CONTENT, px(48)).apply { marginStart = px(8) })
             root.addView(this, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { topMargin = px(8) })
         }
         transport.onItemSelectedListener = SimpleSelect {
@@ -286,7 +305,7 @@ class MainActivity : Activity() {
 
         heat = Switch(this).apply {
             text = "Protect phone from heat (lower quality while hot)"
-            setTextColor(Color.WHITE)
+            setTextColor(TEXT)
             isChecked = true
             setPadding(px(4), px(16), px(4), 0)
             root.addView(this, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
@@ -295,12 +314,20 @@ class MainActivity : Activity() {
         startButton = Button(this).apply {
             text = "Start streaming"
             setTextColor(Color.WHITE)
-            textSize = 16f
+            textSize = 17f
             isAllCaps = false
-            background = GradientDrawable().apply { cornerRadius = px(14).toFloat(); setColor(ACCENT) }
+            setTypeface(typeface, Typeface.BOLD)
+            // Violet -> cyan primary action, with a ripple for press feedback.
+            background = android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(Color.parseColor("#40FFFFFF")),
+                GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(ACCENT, ACCENT_2)).apply {
+                    cornerRadius = px(16).toFloat()
+                },
+                null,
+            )
             setOnClickListener { onStartClicked() }
         }
-        root.addView(startButton, LinearLayout.LayoutParams(MATCH_PARENT, px(56)).apply { topMargin = px(24) })
+        root.addView(startButton, LinearLayout.LayoutParams(MATCH_PARENT, px(60)).apply { topMargin = px(28) })
 
         root.addView(TextView(this).apply {
             text = "After you tap Start, Android asks to share your screen: choose " +
@@ -308,7 +335,8 @@ class MainActivity : Activity() {
             setTextColor(MUTED)
             textSize = 12f
             gravity = Gravity.CENTER
-            setPadding(0, px(14), 0, 0)
+            setLineSpacing(0f, 1.25f)
+            setPadding(px(8), px(16), px(8), 0)
         })
 
         setContentView(ScrollView(this).apply {
@@ -325,9 +353,14 @@ class MainActivity : Activity() {
     companion object {
         private const val REQ_PERMS = 1
         private const val REQ_CAPTURE = 2
-        private val BG = Color.parseColor("#0F1117")
-        private val CARD = Color.parseColor("#1B1E27")
-        private val MUTED = Color.parseColor("#9AA0AE")
-        private val ACCENT = Color.parseColor("#7C5CFF")
+        // OSSG / PhantomBlitz palette (same tokens as desktop/ui/style.css)
+        private val BG = Color.parseColor("#070A14")
+        private val CARD = Color.parseColor("#11172E")
+        private val LINE = Color.parseColor("#222B4D")
+        private val TEXT = Color.parseColor("#E8ECF8")
+        private val MUTED = Color.parseColor("#8E97B5")
+        private val CYAN = Color.parseColor("#67E8F9")
+        private val ACCENT = Color.parseColor("#7C3AED")
+        private val ACCENT_2 = Color.parseColor("#0E7FA8")
     }
 }

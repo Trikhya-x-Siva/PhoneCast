@@ -15,8 +15,8 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
-        android:label="PhoneCast"
-        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        android:label="@string/app_name"
+        android:theme="@style/Theme.OSSG">
 
         <activity
             android:name=".MainActivity"
