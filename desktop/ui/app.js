@@ -289,7 +289,7 @@ function renderGameMode(g, pc) {
   if (performance.now() - gameModeTouchedAt > 1500) $("gameModeToggle").checked = !!g.enabled;
   $("gameModeHint").textContent = g.active && g.note
     ? g.note
-    : "While you stream over USB, the phone's screen becomes 16:9 so the game fills the whole stream: no bars, crop, stretch or blur. Your phone's own setting comes back when you stop. Start the stream before opening the game.";
+    : "Makes the phone's screen 16:9 while streaming over USB, so the game fills the stream. Some phones (OnePlus) stretch the picture on the phone itself while it is on: if yours does, leave this off. Your phone's own setting comes back when you stop.";
 }
 
 // ---------------- source: phone or this PC ----------------

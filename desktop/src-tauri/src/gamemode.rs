@@ -4,6 +4,10 @@
 //! stretch and no blurred background, like streamers with a capture card.
 //! Fewer pixels to capture and encode also means less phone heat.
 //!
+//! Off by default: on a OnePlus CPH2691 the phone stretched the 16:9 area
+//! over the whole panel instead of adding side bars, which made the game
+//! unplayable on the phone. It stays as an option for phones that letterbox.
+//!
 //! The phone's own size setting is saved first and put back exactly (many
 //! phones, e.g. OnePlus at "FHD+", already use a size override, so a plain
 //! `wm size reset` would change the user's resolution). Three things restore

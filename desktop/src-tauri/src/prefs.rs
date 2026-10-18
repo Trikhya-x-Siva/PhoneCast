@@ -40,7 +40,7 @@ impl Default for Prefs {
             hotkeys: BTreeMap::new(),
             mic: None,
             voice_app: "auto".into(),
-            game_16x9: true,
+            game_16x9: false,
         }
     }
 }
