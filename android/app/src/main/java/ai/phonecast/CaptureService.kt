@@ -286,6 +286,7 @@ class CaptureService : Service(), StreamClient.Listener {
                     .put("bitrateMode", enc.bitrateModeName)
                     .put("paced", pacer != null)
                     .put("repeated", pacer?.repeated ?: 0)
+                    .put("pacer", pacer?.summary ?: "off")
                     .put("transport", settings.transport.name)
                     .put("audio", audio != null)
                     .put("thermal", thermal)

@@ -64,6 +64,17 @@ class FramePacer(fps: Int, refreshRate: Float) {
         private set
     private var freshSinceLast = false
 
+    // Diagnostics, logged every 2 s: where frames stop if the stream is empty.
+    private var framesIn = 0L
+    private var drawn = 0L
+    private var drawFailed = 0L
+    private var lastLogNs = 0L
+
+    /** One-line frame-flow summary for the PC's diagnostics log. */
+    val summary: String
+        get() = "in=$framesIn drawn=$drawn failed=$drawFailed out=${output != EGL14.EGL_NO_SURFACE} ${outW}x$outH tick=$ticks"
+    @Volatile private var ticks = 0L
+
     init {
         runBlocking {
             setupEgl()
@@ -73,11 +84,14 @@ class FramePacer(fps: Int, refreshRate: Float) {
                 // Latch the newest game frame right away; the vsync tick draws it.
                 if (!running) return@setOnFrameAvailableListener
                 st.updateTexImage()
+                framesIn++
                 hasFrame = true
                 freshSinceLast = true
             }, handler)
             inputSurface = Surface(surfaceTexture)
-            handler.post(tick)
+            // The tick is started in setOutput: `tick` is declared below this
+            // init block, so here it is still null, and a null Runnable is
+            // silently dropped (the pacer then never drew a single frame).
         }
     }
 
@@ -92,6 +106,8 @@ class FramePacer(fps: Int, refreshRate: Float) {
         outH = height
         surfaceTexture.setDefaultBufferSize(width, height)
         nextNs = 0L
+        handler.removeCallbacks(tick)
+        handler.post(tick)
     }
 
     /**
@@ -103,7 +119,15 @@ class FramePacer(fps: Int, refreshRate: Float) {
     private val tick = object : Runnable {
         override fun run() {
             if (!running) return
+            ticks++
             val now = System.nanoTime()
+            if (now - lastLogNs > 2_000_000_000L) {
+                lastLogNs = now
+                Log.i(
+                    "PhoneCast",
+                    "pacer: in=$framesIn drawn=$drawn failed=$drawFailed output=${output != EGL14.EGL_NO_SURFACE} size=${outW}x$outH",
+                )
+            }
             if (output != EGL14.EGL_NO_SURFACE && hasFrame) {
                 if (nextNs == 0L || now - nextNs > intervalNs * 3) nextNs = now // start / resync after a stall
                 if (now >= nextNs - 1_500_000L) { // our turn (allow 1.5 ms early wake-up)
@@ -122,7 +146,10 @@ class FramePacer(fps: Int, refreshRate: Float) {
     }
 
     private fun draw(ptsNs: Long) {
-        if (!EGL14.eglMakeCurrent(display, output, output, context)) return
+        if (!EGL14.eglMakeCurrent(display, output, output, context)) {
+            if (drawFailed++ % 60 == 0L) Log.e("PhoneCast", "pacer: eglMakeCurrent failed 0x${Integer.toHexString(EGL14.eglGetError())}")
+            return
+        }
         GLES20.glViewport(0, 0, outW, outH)
         surfaceTexture.getTransformMatrix(texMatrix)
         GLES20.glUseProgram(program)
@@ -135,7 +162,11 @@ class FramePacer(fps: Int, refreshRate: Float) {
         GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 0, TEX)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         EGLExt.eglPresentationTimeANDROID(display, output, ptsNs)
-        EGL14.eglSwapBuffers(display, output)
+        if (EGL14.eglSwapBuffers(display, output)) {
+            drawn++
+        } else if (drawFailed++ % 60 == 0L) {
+            Log.e("PhoneCast", "pacer: eglSwapBuffers failed 0x${Integer.toHexString(EGL14.eglGetError())}")
+        }
     }
 
     fun release() {

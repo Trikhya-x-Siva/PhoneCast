@@ -764,8 +764,9 @@ impl Core {
                         diag::log(
                             "phone",
                             format!(
-                                "phone encoder only {fps} fps (thermal {})",
-                                v.get("thermal").and_then(Value::as_u64).unwrap_or(0)
+                                "phone encoder only {fps} fps (thermal {}, pacer {})",
+                                v.get("thermal").and_then(Value::as_u64).unwrap_or(0),
+                                v.get("pacer").and_then(Value::as_str).unwrap_or("-")
                             ),
                         );
                     }
