@@ -1203,6 +1203,15 @@ impl Core {
     }
 
     pub fn stop_live(&self) {
+        self.stop_live_because("End stream button");
+    }
+
+    /// Ends the stream, saying why in the log (so "it cut off" can be told
+    /// apart from a click, a hotkey or the window closing).
+    pub fn stop_live_because(&self, why: &str) {
+        if self.live.is_live() {
+            diag::log("live", format!("ending the stream: {why}"));
+        }
         self.live.stop();
     }
 
@@ -1532,7 +1541,7 @@ impl Core {
             }
             Action::Live => {
                 if self.live.is_live() {
-                    self.stop_live();
+                    self.stop_live_because("Go live hotkey");
                     self.notify("hotkey", "Stream ended");
                     Ok(())
                 } else {

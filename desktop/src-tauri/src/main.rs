@@ -666,6 +666,17 @@ fn close_children_with_phonecast() {
 
 fn main() {
     diag::init();
+    // Any internal error is written to the log before anything else, so a
+    // crash always leaves its reason behind.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current().name().unwrap_or("?").to_string();
+        diag::log(
+            "crash",
+            format!("internal error in thread {thread}: {info}"),
+        );
+        default_hook(info);
+    }));
     #[cfg(windows)]
     close_children_with_phonecast();
     tauri::Builder::default()
@@ -689,7 +700,7 @@ fn main() {
                     ai.stop();
                 }
                 if let Some(core) = window.try_state::<Arc<Core>>() {
-                    core.stop_live();
+                    core.stop_live_because("window closed");
                     core.stop_recording().ok();
                     // Give the recorder and streams a moment to close cleanly.
                     std::thread::sleep(std::time::Duration::from_millis(800));

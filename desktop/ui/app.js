@@ -965,6 +965,7 @@ let currentScene = null;
 // the phone reconnects or rotates), until "Back to game".
 let wantedScene = null;
 let applying = false;
+let lastSceneTry = 0;
 async function prepareScene(name) {
   // Without the phone, scenes use its usual stream size (1920x872).
   const v = (window.lastStatus && window.lastStatus.video) || { width: 1920, height: 872 };
@@ -1031,8 +1032,16 @@ for (const b of document.querySelectorAll(".scene")) {
 }
 function renderScene(s) {
   // A wanted scene comes (back) on by itself once the phone streams.
-  if (wantedScene && !s.scene && !applying) {
-    showScene(wantedScene).catch((e) => toast(String(e.message || e)));
+  // At most one try per second, and a failure (e.g. This PC is the source)
+  // ends the wish instead of re-drawing the scene on every status update.
+  if (wantedScene && !s.scene && !applying && performance.now() - lastSceneTry > 1000) {
+    lastSceneTry = performance.now();
+    const name = wantedScene;
+    showScene(name).catch((e) => {
+      if (wantedScene === name) wantedScene = null;
+      toast(String(e.message || e));
+      renderScene(window.lastStatus || {});
+    });
   }
   const on = s.scene === "stinger" ? null : s.scene || wantedScene || null;
   if (on === currentScene) return;
