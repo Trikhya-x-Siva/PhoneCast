@@ -501,6 +501,9 @@ impl PcVideo {
             }
             PcInput::Ddagrab { output } => {
                 let mut a: Vec<String> = [
+                    // Deep queue so a busy moment never stalls the capture.
+                    "-thread_queue_size",
+                    "1024",
                     "-init_hw_device",
                     "d3d11va=d3d:0",
                     "-filter_hw_device",
@@ -585,7 +588,7 @@ impl PcVideo {
         }
         let mut chain = String::from("[0:v]hwdownload,format=bgra");
         if !native {
-            chain.push_str(&format!(",scale={w}:{h}:force_original_aspect_ratio=decrease:flags=bicubic,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2"));
+            chain.push_str(&format!(",scale={w}:{h}:force_original_aspect_ratio=decrease:flags=bicubic,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1"));
         }
         if let Some(c) = cam {
             let cw = ((w as f32 * c.size.clamp(0.1, 0.5)) as u32) / 2 * 2;

@@ -1074,13 +1074,30 @@ impl Job {
         .collect();
         a.extend(pc.inputs());
         let audio_idx = pc.audio_index();
+        // The mixed audio is stamped on arrival and gently resynced, so video
+        // never waits on audio: measured 59.4 fps with no hiccups, versus
+        // 21.7 fps with 1.4 s freezes when the audio pipe ran slow.
         a.extend(
-            ["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0"]
-                .iter()
-                .map(|s| s.to_string()),
+            [
+                "-thread_queue_size",
+                "1024",
+                "-use_wallclock_as_timestamps",
+                "1",
+                "-f",
+                "s16le",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-i",
+                "pipe:0",
+            ]
+            .iter()
+            .map(|s| s.to_string()),
         );
         a.extend(pc.filter(self.w, self.h, self.encoder.contains("nvenc")));
         a.extend(["-map".into(), format!("{audio_idx}:a")]);
+        a.extend(["-af".into(), "aresample=async=1000:first_pts=0".into()]);
         a.extend(pc.color_args());
         if self.file {
             // Visually lossless recording: quality-based rate control.
@@ -1460,6 +1477,12 @@ fn is_connection_error(msg: &str) -> bool {
 /// 1080p went out as 1920×1088 (and 720p as 736): platforms reject or
 /// rescale that. A final `scale_cuda=format=yuv420p` gives exact-size
 /// frames (checked by the `gpu_framing_sizes` test).
+///
+/// The blurred background is enlarged on the CPU (about a tenth of a core at
+/// 1080p): enlarging it with `scale_cuda` left green rows at the bottom of
+/// 720p, 1080p and 2160p frames. Every branch ends with `setsar=1`, because
+/// `pad_cuda` kept the phone's pixel shape and players then showed the 16:9
+/// Fit frame squeezed to 2.2:1. The test checks size, pixel shape and edges.
 pub(crate) fn video_filter(
     nvidia: bool,
     framing: Framing,
@@ -1479,19 +1502,19 @@ pub(crate) fn video_filter(
                 format!(
                     "[0:v:0]split=2[a][b];[a]{fit}[fg];\
                      [b]scale_cuda=w=384:h=216:force_original_aspect_ratio=increase:force_divisible_by=2:format=nv12,\
-                     hwdownload,format=nv12,format=yuv420p,crop=384:216,{soften},format=nv12,hwupload_cuda,\
-                     scale_cuda=w={w}:h={h}:interp_algo=bilinear:format=nv12[bg];\
+                     hwdownload,format=nv12,format=yuv420p,crop=384:216,{soften},\
+                     scale={w}:{h}:flags=fast_bilinear,format=nv12,hwupload_cuda[bg];\
                      [bg][fg]overlay_cuda=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2,\
-                     scale_cuda=format=yuv420p,fps=60[v]"
+                     scale_cuda=format=yuv420p,fps=60,setsar=1[v]"
                 ),
             ),
             Framing::Fit => (
                 &["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
-                format!("[0:v:0]{fit},pad_cuda={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=60[v]"),
+                format!("[0:v:0]{fit},pad_cuda={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=60,setsar=1[v]"),
             ),
             Framing::Fill => (
                 &["-hwaccel", "cuda"],
-                format!("[0:v:0]{crop16x9},hwupload_cuda,scale_cuda={w}:{h}:interp_algo=lanczos:format=nv12,fps=60[v]"),
+                format!("[0:v:0]{crop16x9},hwupload_cuda,scale_cuda={w}:{h}:interp_algo=lanczos:format=nv12,fps=60,setsar=1[v]"),
             ),
         }
     } else {
@@ -2273,8 +2296,10 @@ mod tests {
         assert!(probe.starts_with("h264,1280,720"), "{probe}");
     }
 
-    /// The GPU filter graph must produce exactly the preset size for every
-    /// framing (overlay_cuda used to pad 1080 → 1088).
+    /// The GPU filter graph must produce exactly the preset size, square
+    /// pixels and clean edges for every framing (overlay_cuda used to pad
+    /// 1080 → 1088, pad_cuda kept a 99:80 pixel shape, and scale_cuda left
+    /// green bottom rows).
     /// `PHONECAST_SAMPLE=<file.h264> cargo test gpu_framing_sizes -- --ignored --nocapture`
     #[test]
     #[ignore]
@@ -2303,14 +2328,27 @@ mod tests {
                 assert!(st.success(), "{framing:?} {w}x{h}");
                 let o = Command::new(ffmpeg.with_file_name("ffprobe.exe"))
                     .args(["-v", "error", "-select_streams", "v"])
-                    .args(["-show_entries", "stream=width,height", "-of", "csv=p=0"])
+                    .args(["-show_entries", "stream=width,height,sample_aspect_ratio"])
+                    .args(["-of", "csv=p=0"])
                     .arg(&out)
                     .output()
                     .unwrap();
                 let got = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                println!("{framing:?} {w}x{h} -> {got}");
-                if got != format!("{w},{h}") {
-                    bad.push(format!("{framing:?} {w}x{h} -> {got}"));
+                // Bottom-centre pixel: unwritten GPU rows show as pure green.
+                let px = Command::new(&ffmpeg)
+                    .args(["-v", "error", "-ss", "0.5", "-i"])
+                    .arg(&out)
+                    .args(["-frames:v", "1", "-vf"])
+                    .arg(format!("crop=1:1:{}:{},format=rgb24", w / 2, h - 1))
+                    .args(["-f", "rawvideo", "-"])
+                    .output()
+                    .unwrap()
+                    .stdout;
+                let green = px.len() == 3 && px[0] < 16 && px[1] > 96 && px[2] < 16;
+                println!("{framing:?} {w}x{h} -> {got} bottom {px:?}");
+                // Square pixels: otherwise players squeeze or stretch the picture.
+                if got != format!("{w},{h},1:1") || green {
+                    bad.push(format!("{framing:?} {w}x{h} -> {got} bottom {px:?}"));
                 }
             }
         }

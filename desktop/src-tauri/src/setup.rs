@@ -255,6 +255,12 @@ fn upload_once(file: &Path) -> Result<f64, String> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UploadResult {
     pub min: f64,
+    /// The speed available at least 75% of the time (25th percentile; the
+    /// minimum when there are fewer than 4 samples). Quality is planned on
+    /// this: planning on the single worst sample let one brief Wi-Fi dip
+    /// (14.7 vs a 27 Mbps median) force 720p for a whole stream, while the
+    /// fifo reconnect and keyframe-skipping already absorb short dips.
+    pub sustained: f64,
     pub median: f64,
     pub max: f64,
     pub samples: usize,
@@ -270,8 +276,10 @@ pub fn summarize(samples: &[f64]) -> Option<UploadResult> {
         return None;
     }
     v.sort_by(|a, b| a.total_cmp(b));
+    let sustained = if v.len() < 4 { v[0] } else { v[v.len() / 4] };
     Some(UploadResult {
         min: v[0],
+        sustained,
         median: v[v.len() / 2],
         max: v[v.len() - 1],
         samples: v.len(),
@@ -311,8 +319,8 @@ pub fn upload_speed_test(
     crate::diag::log(
         "setup",
         format!(
-            "upload test: min {:.1} / median {:.1} / max {:.1} Mbps ({} samples)",
-            r.min, r.median, r.max, r.samples
+            "upload test: min {:.1} / sustained {:.1} / median {:.1} / max {:.1} Mbps ({} samples)",
+            r.min, r.sustained, r.median, r.max, r.samples
         ),
     );
     Ok(r)
@@ -369,6 +377,12 @@ mod tests {
         assert_eq!(r.samples, 4);
         assert_eq!(r.median, 40.0);
         assert!(summarize(&[]).is_none());
+        // One dip out of eight doesn't decide the quality.
+        let r = summarize(&[14.7, 27.0, 31.3, 26.0, 28.0, 29.5, 27.3, 30.0]).unwrap();
+        assert_eq!(r.min, 14.7);
+        assert_eq!(r.sustained, 27.0);
+        // Few samples: stay careful.
+        assert_eq!(summarize(&[20.0, 10.0, 30.0]).unwrap().sustained, 10.0);
     }
 
     #[test]

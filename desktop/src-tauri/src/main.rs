@@ -195,7 +195,8 @@ async fn setup_upload_test(app: tauri::AppHandle, core: CoreState<'_>) -> Result
             app.emit("setup-upload", json!({ "fraction": f, "mbps": mbps }))
                 .ok();
         })?;
-        let min = (r.min * 10.0).floor() / 10.0;
+        // Plan on the sustained speed (25th percentile), not one brief dip.
+        let min = (r.sustained * 10.0).floor() / 10.0;
         core.live.update_settings(&json!({ "uploadMbps": min }))?;
         let hevc = core.live.settings_json()["hevc"].as_bool().unwrap_or(false);
         Ok(json!({

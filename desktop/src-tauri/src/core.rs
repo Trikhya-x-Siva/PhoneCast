@@ -524,36 +524,50 @@ impl Core {
 
     /// Keeps Discord + mic flowing to the outputs even when the phone sends no
     /// game audio: produces 10 ms mixes on the phone's clock.
+    /// Produces exactly 100 chunks of 10 ms per second, counted from real
+    /// elapsed time. Windows sleeps in ~15.6 ms steps, so "sleep 10 ms and
+    /// skip if late" made only ~63 chunks/s: in PC mode the audio clock ran at
+    /// 63% speed, FFmpeg held video back to stay in sync, and streams went
+    /// frame-by-frame with a growing delay. Missed chunks are now caught up.
     fn mix_clock(&self) {
-        let mut next = Instant::now();
+        const CHUNK_US: i64 = 10_000;
+        let epoch_us = self.now_us();
+        let mut produced: i64 = 0; // chunks emitted (or skipped) so far
         loop {
-            next += Duration::from_millis(10);
-            match next.checked_duration_since(Instant::now()) {
-                Some(wait) => std::thread::sleep(wait),
-                None => next = Instant::now(),
+            std::thread::sleep(Duration::from_millis(4));
+            let due = (self.now_us() - epoch_us) / CHUNK_US;
+            if due - produced > 50 {
+                // More than 0.5 s behind (paused, or the PC stalled): resync
+                // instead of bursting stale audio.
+                produced = due - 1;
             }
-            let pc = self.is_pc_mode();
-            let offset = {
-                let i = self.inner.lock().unwrap();
-                if !i.connected && !pc {
+            while produced < due {
+                produced += 1;
+                let pc = self.is_pc_mode();
+                let offset = {
+                    let i = self.inner.lock().unwrap();
+                    if !i.connected && !pc {
+                        continue;
+                    }
+                    // PC mode without a phone runs on the PC clock.
+                    i.clock_offset()
+                        .map(|(o, _)| o)
+                        .or(if pc { Some(0) } else { None })
+                };
+                if !self.has_outputs() {
                     continue;
                 }
-                // PC mode without a phone runs on the PC clock.
-                i.clock_offset()
-                    .map(|(o, _)| o)
-                    .or(if pc { Some(0) } else { None })
-            };
-            if !self.has_outputs() {
-                continue;
+                let (Some(offset), Some(pcm)) = (offset, self.mixer.mix_without_game()) else {
+                    continue;
+                };
+                // Timestamp of this chunk on the steady 10 ms grid, matched to
+                // the PC sources' ~40 ms buffer.
+                let pts = epoch_us + produced * CHUNK_US + offset - 40_000;
+                self.dispatch(Media::Audio {
+                    pts,
+                    pcm: Arc::new(pcm),
+                });
             }
-            let (Some(offset), Some(pcm)) = (offset, self.mixer.mix_without_game()) else {
-                continue;
-            };
-            let pts = self.now_us() + offset - 40_000; // match the PC sources' buffer
-            self.dispatch(Media::Audio {
-                pts,
-                pcm: Arc::new(pcm),
-            });
         }
     }
 

@@ -7,7 +7,9 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -106,7 +108,16 @@ class MainActivity : Activity() {
     @Suppress("DEPRECATION")
     private fun askScreenCapture() {
         val mpm = getSystemService(MediaProjectionManager::class.java)
-        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE)
+        // Android 14+ also offers "A single app" in the share prompt. Picking
+        // it (or it being the default) captured only PhoneCast itself, so the
+        // stream went to 0 fps as soon as the game opened. Ask for the entire
+        // screen only, so that choice can't be made by mistake.
+        val intent = if (Build.VERSION.SDK_INT >= 34) {
+            mpm.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
+        } else {
+            mpm.createScreenCaptureIntent()
+        }
+        startActivityForResult(intent, REQ_CAPTURE)
     }
 
     @Deprecated("Deprecated in Java")
