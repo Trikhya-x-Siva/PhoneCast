@@ -35,6 +35,13 @@ class StreamClient(
 
     @Volatile var connected = false
         private set
+
+    /** "USB", "Wi-Fi" or "Wi-Fi (USB dropped)": how the PC is reached now. */
+    @Volatile var via = if (host == "127.0.0.1") "USB" else "Wi-Fi"
+        private set
+
+    /** PC found on Wi-Fi after the USB link dropped (reused until it fails). */
+    @Volatile private var wifiHost: String? = null
     @Volatile private var running = true
     @Volatile private var socket: Socket? = null
 
@@ -110,11 +117,7 @@ class StreamClient(
     private fun connectLoop() {
         while (running) {
             try {
-                val s = Socket()
-                s.tcpNoDelay = true
-                // Small kernel buffer: backlog stays in our queue where we can drop it.
-                s.sendBufferSize = 256 * 1024
-                s.connect(InetSocketAddress(host, port), 2000)
+                val s = open()
                 socket = s
                 session(s)
             } catch (e: Exception) {
@@ -136,6 +139,69 @@ class StreamClient(
             }
         }
     }
+
+    private fun connectTo(h: String): Socket {
+        val s = Socket()
+        s.tcpNoDelay = true
+        // Small kernel buffer: backlog stays in our queue where we can drop it.
+        s.sendBufferSize = 256 * 1024
+        try {
+            s.connect(InetSocketAddress(h, port), 2000)
+        } catch (e: Exception) {
+            runCatching { s.close() }
+            throw e
+        }
+        return s
+    }
+
+    /**
+     * USB first. OnePlus/ColorOS phones sometimes switch USB debugging off
+     * mid-stream (the cable stays connected but the PC loses the phone), so
+     * when USB is unreachable the stream carries on over Wi-Fi: the PC is
+     * found with the same broadcast as "Find PC" (UDP 27185).
+     */
+    private fun open(): Socket {
+        if (host != "127.0.0.1") return connectTo(host).also { via = "Wi-Fi" }
+        try {
+            return connectTo(host).also { via = "USB" }
+        } catch (usb: Exception) {
+            val wifi = wifiHost ?: findPcOnWifi() ?: throw usb
+            return try {
+                connectTo(wifi).also {
+                    wifiHost = wifi
+                    via = "Wi-Fi (USB dropped)"
+                    Log.i(TAG, "USB unavailable: streaming over Wi-Fi to $wifi")
+                }
+            } catch (e: Exception) {
+                wifiHost = null
+                throw e
+            }
+        }
+    }
+
+    /** First PhoneCast PC that answers on this Wi-Fi, or null. */
+    private fun findPcOnWifi(): String? = runCatching {
+        java.net.DatagramSocket().use { sock ->
+            sock.broadcast = true
+            sock.soTimeout = 400
+            val msg = "PCST-DISCOVER".toByteArray()
+            sock.send(
+                java.net.DatagramPacket(msg, msg.size, java.net.InetAddress.getByName("255.255.255.255"), 27185)
+            )
+            val buf = ByteArray(256)
+            val deadline = System.currentTimeMillis() + 1500
+            while (System.currentTimeMillis() < deadline) {
+                val p = java.net.DatagramPacket(buf, buf.size)
+                try {
+                    sock.receive(p)
+                } catch (_: java.net.SocketTimeoutException) {
+                    continue
+                }
+                if (String(buf, 0, p.length).startsWith("PCST-HERE")) return@runCatching p.address.hostAddress
+            }
+            null
+        }
+    }.getOrNull()
 
     private fun session(s: Socket) {
         val out = DataOutputStream(BufferedOutputStream(s.getOutputStream(), 64 * 1024))

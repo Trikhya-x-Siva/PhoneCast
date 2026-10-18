@@ -122,7 +122,9 @@ class CaptureService : Service(), StreamClient.Listener {
             targetBitrate = settings.effectiveBitrate
             currentBitrate = targetBitrate
 
-            if (settings.transport == Transport.WIFI) {
+            // Also over USB: if USB debugging drops, the stream moves to Wi-Fi,
+            // which then needs to be awake and low-latency.
+            run {
                 val wm = applicationContext.getSystemService(WifiManager::class.java)
                 @Suppress("DEPRECATION")
                 val mode = if (Build.VERSION.SDK_INT >= 29)
@@ -295,7 +297,7 @@ class CaptureService : Service(), StreamClient.Listener {
                     .put("paced", pacer != null)
                     .put("repeated", pacer?.repeated ?: 0)
                     .put("pacer", pacer?.summary ?: "off")
-                    .put("transport", settings.transport.name)
+                    .put("transport", c.via)
                     .put("audio", audio != null)
                     .put("thermal", thermal)
                     .put("heatLimited", thermalLimited)
@@ -304,8 +306,8 @@ class CaptureService : Service(), StreamClient.Listener {
 
                 status = when {
                     !c.connected -> "Waiting for PC at ${settings.connectHost}…"
-                    thermalLimited -> "Streaming ${enc.width}x${enc.height} · $fps fps · ${kbps / 1000} Mbps · lowered: phone is hot"
-                    else -> "Streaming ${enc.width}x${enc.height} · $fps fps · ${kbps / 1000} Mbps"
+                    thermalLimited -> "Streaming ${enc.width}x${enc.height} · $fps fps · ${kbps / 1000} Mbps · ${c.via} · lowered: phone is hot"
+                    else -> "Streaming ${enc.width}x${enc.height} · $fps fps · ${kbps / 1000} Mbps · ${c.via}"
                 }
                 updateNotification()
             }

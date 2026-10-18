@@ -8,6 +8,7 @@ mod capture;
 mod compositor;
 mod core;
 mod diag;
+mod discovery;
 mod engine;
 mod gamemode;
 mod hotkeys;

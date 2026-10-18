@@ -227,6 +227,9 @@ impl Core {
             })?;
 
         adb::spawn(phone_port(), core.adb.clone());
+        // Answers the phone's "Find PC" on Wi-Fi; the phone also uses it to
+        // carry on over Wi-Fi when its USB link drops mid-stream.
+        crate::discovery::spawn();
 
         let c = core.clone();
         let app2 = app.clone();
