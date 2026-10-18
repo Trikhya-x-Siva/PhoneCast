@@ -51,10 +51,6 @@ The most-requested capture features, built on GPU-only paths:
 
 ## v0.3 — reliability and streamer tools
 Done so far (see CHANGELOG):
-- ✅ **Dynamic bitrate** on upload congestion with a visible health indicator
-  (Streamlabs' most-marketed feature; OBS hides it). Per destination, a
-  short quality ladder: down after 5 s below 0.95x, up after a stable
-  minute, at most one restart a minute.
 - ✅ **Replay buffer / instant clips**: Ctrl+Shift+F8/F9/F10 save the last
   15 / 30 / 60 s from an in-memory buffer (OBS idea #263) as MP4 without
   re-encoding. Still to do: send a clip to the phone for Shorts/TikTok.
@@ -64,6 +60,12 @@ Done so far (see CHANGELOG):
   by stable ID, with a plain warning when one is missing (OBS #12050).
 
 Next:
+- **Dynamic bitrate** on upload congestion with a visible health indicator
+  (Streamlabs' most-marketed feature; OBS hides it). It must change the
+  bitrate of the running encoder, the way OBS, belacoder and Moblin do,
+  never restart the stream: restarts glitch for viewers and make YouTube
+  report "not receiving enough video". Comes with the streaming engine v2
+  (in-process encoder and RTMP sender with backlog-based control).
 - **Reconnect that never loses audio** (OBS #5572): outputs re-sync from the
   phone clock after any drop.
 - **Vertical output**: a second 9:16 canvas for TikTok/Shorts/Kick alongside

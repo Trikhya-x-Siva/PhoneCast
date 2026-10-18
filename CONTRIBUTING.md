@@ -17,8 +17,6 @@ Open an issue with:
   builds a release APK and installs it on the USB-connected phone.
 - **Tests:** `cargo test` in `desktop/src-tauri`. Some tests are `#[ignore]`
   because they need a sample stream, FFmpeg or a GPU; see their comments.
-  `cargo test slow_upload -- --ignored --nocapture` simulates a congested
-  upload and checks the dynamic-bitrate step-down and recovery (~2 min).
 - **Two instances:** set `PHONECAST_PORT=27283` to run a development build
   next to the installed app (the phone and preview ports move together).
 

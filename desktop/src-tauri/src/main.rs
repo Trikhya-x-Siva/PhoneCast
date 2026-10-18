@@ -1,7 +1,6 @@
 // No console window in release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod adapt;
 mod adb;
 mod ai;
 mod audio;
@@ -86,6 +85,11 @@ fn save_clip(core: CoreState, seconds: u32) -> Result<(), String> {
 #[tauri::command]
 fn set_replay_seconds(core: CoreState, seconds: u32) {
     core.set_replay_seconds(seconds);
+}
+
+#[tauri::command]
+fn set_clip_look(core: CoreState, look: String) {
+    core.set_clip_look(&look);
 }
 
 #[tauri::command]
@@ -282,6 +286,7 @@ fn main() {
             ai_open_url,
             save_clip,
             set_replay_seconds,
+            set_clip_look,
             open_clips,
             get_hotkeys,
             set_hotkeys

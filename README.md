@@ -15,8 +15,6 @@ scrcpy + OBS for game streamers.
 - **Instant clips**: press a hotkey in the middle of a game and the last
   15 / 30 / 60 s are saved as an MP4, no re-encode.
 - **Hotkeys that work in-game** for clips, mic mute, record and go live.
-- **Dynamic bitrate**: a struggling upload lowers one destination's quality
-  instead of stuttering, and raises it again when the connection recovers.
 - **Honest health display**: fps, delay, bitrate, dropped frames, phone
   temperature, and a diagnostics log that says *where* a stall happened.
 - ~5 MB installer, ~30 MB RAM. Nothing leaves your PC except the stream.
@@ -64,11 +62,6 @@ headphones to avoid echo.
 Click **Go live**, paste your YouTube and/or Twitch stream key, pick a
 quality, **Start streaming**. The side panel shows each platform's status.
 The window shows the upload speed you need; run a speed test first.
-If your upload cannot keep up for 5 seconds, the Live card says *Upload
-struggling → lowered to …*: that platform drops one step (YouTube: 20 → 14
-Mbps, then 1080p60 at 9 Mbps) and goes back up by itself once the
-connection has been smooth for a minute. Each change restarts that one
-stream for a moment, so it happens at most once a minute.
 
 ### Clips and hotkeys
 PhoneCast keeps the last 90 seconds in memory (change or turn it off in the
@@ -82,6 +75,10 @@ PhoneCast keeps the last 90 seconds in memory (change or turn it off in the
 | Ctrl+Shift+L | Go live / end the stream |
 
 Clips land in `Videos\PhoneCast\Clips` (the **Clips** button opens it).
+By default a clip is the original phone picture, saved instantly with no
+quality loss. Choose **Clip picture → Like the stream** to get the 16:9
+picture your viewers saw (blurred background, 1440p); that takes a few
+seconds of GPU work per clip.
 The buffer is RAM: at the phone's 50 Mbps USB setting 90 s is about
 560 MB (the Clips panel shows the live figure); lower the length or the
 phone bitrate on a PC with little memory. PC-mode clips use the 720p

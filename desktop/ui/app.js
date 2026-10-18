@@ -368,7 +368,7 @@ const DEST_ICON = {
   youtube: '<div class="dest-icon yt"><svg viewBox="0 0 24 24"><path d="M22 8.5a3 3 0 0 0-2.1-2.1C18 6 12 6 12 6s-6 0-7.9.4A3 3 0 0 0 2 8.5 31 31 0 0 0 2 12a31 31 0 0 0 .1 3.5 3 3 0 0 0 2 2.1C6 18 12 18 12 18s6 0 7.9-.4a3 3 0 0 0 2.1-2.1A31 31 0 0 0 22 12a31 31 0 0 0 0-3.5z"/><path d="m10 15 5-3-5-3z"/></svg></div>',
   twitch: '<div class="dest-icon tw"><svg viewBox="0 0 24 24"><path d="M21 2H3v16h5v4l4-4h5l4-4z"/><path d="M11 11V7M16 11V7"/></svg></div>',
 };
-const STATE_TEXT = { live: "Live", connecting: "Connecting", reconnecting: "Reconnecting", adjusting: "Adjusting quality", error: "Error", stopped: "Stopped" };
+const STATE_TEXT = { live: "Live", connecting: "Connecting", reconnecting: "Reconnecting", error: "Error", stopped: "Stopped" };
 
 function renderLive(l) {
   isLive = !!(l && l.active);
@@ -382,19 +382,12 @@ function renderLive(l) {
   $("liveTime").textContent = fmtTime(l.seconds);
   $("liveDests").innerHTML = l.destinations
     .map((d) => {
-      const reduced = d.health === "reduced";
-      const mb = (k) => (k / 1000).toFixed(1);
       const meta = d.state === "live"
-        ? `${mb(d.kbps)} Mbps · ${Math.round(d.fps)} fps · ${reduced ? `${d.qualityNow} (chosen: ${d.quality})` : d.quality}${d.dropped ? ` · ${d.dropped} dropped` : ""}`
-        : d.state === "adjusting" ? `Restarting at ${d.qualityNow} · ${mb(d.kbpsNow)} Mbps`
+        ? `${(d.kbps / 1000).toFixed(1)} Mbps · ${Math.round(d.fps)} fps · ${d.quality}${d.dropped ? ` · ${d.dropped} dropped` : ""}`
         : d.reconnects ? `Reconnect attempt ${d.reconnects}` : `Starting ${d.quality}`;
-      const slow = d.state === "live" && d.speed > 0 && d.speed < 0.95;
-      const note = slow ? `<span class="note reduced">Upload struggling (${d.speed.toFixed(2)}x) — lowering quality if it continues</span>`
-        : d.note ? `<span class="note ${reduced ? "reduced" : "good"}">${escapeHtml(d.note)}</span>` : "";
       return `<div class="ldest">${DEST_ICON[d.id] || ""}<b>${d.name}</b>
         <span class="state ${d.state}">${STATE_TEXT[d.state] || d.state}</span>
         <span class="meta">${meta}</span>
-        ${note}
         ${d.error && d.state !== "live" ? `<span class="err">${escapeHtml(d.error)}</span>` : ""}</div>`;
     })
     .join("");
@@ -751,10 +744,20 @@ $("replaySelect").addEventListener("change", (e) => {
   invoke("set_replay_seconds", { seconds: secs });
   toast(secs ? `Keeping the last ${secs} s for clips` : "Replay buffer off");
 });
+$("clipLook").addEventListener("change", (e) => {
+  replayTouchedAt = performance.now();
+  invoke("set_clip_look", { look: e.target.value });
+  toast(e.target.value === "stream"
+    ? "Clips will be framed like the stream (re-encoded on your GPU)"
+    : "Clips keep the original phone picture");
+});
 function renderReplay(r) {
   if (!r) return;
   if (performance.now() - replayTouchedAt > 1500 && document.activeElement !== $("replaySelect")) {
     $("replaySelect").value = String(r.seconds);
+  }
+  if (performance.now() - replayTouchedAt > 1500 && document.activeElement !== $("clipLook") && r.look) {
+    $("clipLook").value = r.look;
   }
   const mb = (r.bytes / 1048576).toFixed(0);
   $("replayHint").textContent = r.seconds

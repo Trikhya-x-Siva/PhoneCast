@@ -8,6 +8,7 @@
 //! is trimmed to the newest keyframe that still leaves N seconds, so memory is
 //! bounded by N seconds plus one keyframe interval.
 
+use crate::live::ClipLook;
 use crate::mkv::{MkvWriter, VideoConfig, CODEC_H265};
 use crate::sinks::Media;
 use std::collections::VecDeque;
@@ -195,14 +196,27 @@ pub fn clips_dir() -> PathBuf {
     crate::core::recordings_dir().join("Clips")
 }
 
-fn hide(cmd: &mut Command) {
+/// No console window; a re-encoding clip also runs at below-normal
+/// priority so a live stream on the same PC always comes first.
+fn hide(cmd: &mut Command, background: bool) {
     #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000);
+    cmd.creation_flags(0x0800_0000 | if background { 0x0000_4000 } else { 0 });
+    #[cfg(not(windows))]
+    let _ = (cmd, background);
 }
 
 impl Snapshot {
     /// Writes the clip into `dir`. Returns the file written.
-    pub fn save(&self, dir: &Path, ffmpeg: Option<&Path>, label: &str) -> Result<PathBuf, String> {
+    ///
+    /// `look`: None copies the original picture (instant, no quality loss);
+    /// Some re-encodes it to look like the stream (16:9 framing, stream size).
+    pub fn save(
+        &self,
+        dir: &Path,
+        ffmpeg: Option<&Path>,
+        label: &str,
+        look: Option<&ClipLook>,
+    ) -> Result<PathBuf, String> {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         let stamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
         let stem = format!("Clip_{stamp}_{label}");
@@ -224,16 +238,26 @@ impl Snapshot {
         };
         let mp4 = dir.join(format!("{stem}.mp4"));
         let mut cmd = Command::new(ffmpeg);
-        cmd.args(["-hide_banner", "-loglevel", "error", "-y", "-i"]);
-        cmd.arg(&mkv);
-        cmd.args(["-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy"]);
-        if self.config.codec == CODEC_H265 {
-            cmd.args(["-tag:v", "hvc1"]);
+        cmd.args(["-hide_banner", "-loglevel", "error", "-y"]);
+        if let Some(l) = look {
+            cmd.args(l.input_args());
+        }
+        cmd.arg("-i").arg(&mkv);
+        match look {
+            Some(l) => {
+                cmd.args(l.output_args());
+            }
+            None => {
+                cmd.args(["-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy"]);
+                if self.config.codec == CODEC_H265 {
+                    cmd.args(["-tag:v", "hvc1"]);
+                }
+            }
         }
         cmd.args(["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"]);
         cmd.arg(&mp4);
         cmd.stdin(Stdio::null()).stdout(Stdio::null());
-        hide(&mut cmd);
+        hide(&mut cmd, look.is_some());
         let out = cmd
             .output()
             .map_err(|e| format!("Could not run FFmpeg: {e}"))?;
@@ -245,7 +269,7 @@ impl Snapshot {
             let err = String::from_utf8_lossy(&out.stderr);
             crate::diag::log(
                 "clip",
-                format!("MP4 remux failed, kept MKV: {}", err.trim()),
+                format!("MP4 conversion failed, kept MKV: {}", err.trim()),
             );
             Ok(mkv)
         }
@@ -439,11 +463,216 @@ mod tests {
         feed(&mut b, 7_000_000_000, 10);
         let dir = std::env::temp_dir().join("phonecast_clip_test");
         std::fs::remove_dir_all(&dir).ok();
-        let path = b.snapshot(5).unwrap().save(&dir, None, "5s").unwrap();
+        let path = b.snapshot(5).unwrap().save(&dir, None, "5s", None).unwrap();
         assert_eq!(path.extension().unwrap(), "mkv");
         let size = std::fs::metadata(&path).unwrap().len();
         // 5 s of 1 kB frames + 192 kB/s audio, about 1.26 MB.
         assert!(size > 1_000_000, "{size} bytes");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `(width, height, seconds, has_audio)` of a media file, via ffprobe.
+    fn probe(ffmpeg: &Path, file: &Path) -> (u32, u32, f64, bool) {
+        let ffprobe = ffmpeg.with_file_name("ffprobe.exe");
+        let out = Command::new(ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,width,height:format=duration",
+                "-of",
+                "default=nw=1",
+            ])
+            .arg(file)
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        let field = |k: &str| {
+            text.lines()
+                .find_map(|l| l.strip_prefix(&format!("{k}=")))
+                .unwrap_or("0")
+                .to_string()
+        };
+        (
+            field("width").parse().unwrap_or(0),
+            field("height").parse().unwrap_or(0),
+            field("duration").parse().unwrap_or(0.0),
+            text.contains("codec_type=audio"),
+        )
+    }
+
+    /// Average brightness (0-255) of the top 100 rows of a frame 3 s in.
+    /// (A phone picture is wider than 16:9, so any bars are above and below.)
+    fn top_edge_luma(ffmpeg: &Path, file: &Path) -> f64 {
+        let out = Command::new(ffmpeg)
+            .args(["-hide_banner", "-ss", "3", "-i"])
+            .arg(file)
+            .args([
+                "-frames:v",
+                "1",
+                "-vf",
+                "crop=iw:100:0:0,signalstats,metadata=print:key=lavfi.signalstats.YAVG",
+                "-f",
+                "null",
+                "-",
+            ])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stderr);
+        text.lines()
+            .find_map(|l| l.split("lavfi.signalstats.YAVG=").nth(1))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(-1.0)
+    }
+
+    /// A real H.264 phone-shaped stream (2376x1080, 60 fps, 2 s keyframes)
+    /// through the replay buffer, saved both ways. Needs FFmpeg (and a GPU
+    /// for the fast path). `cargo test clip_pictures -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn clip_pictures_original_and_like_the_stream() {
+        let ffmpeg = crate::live::find_ffmpeg().expect("ffmpeg");
+        let enc = crate::live::best_h264(&ffmpeg);
+        println!("encoder: {enc}");
+        let raw = Command::new(&ffmpeg)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=2376x1080:rate=60",
+                "-t",
+                "12",
+                "-c:v",
+                &enc,
+                "-b:v",
+                "20M",
+                "-g",
+                "120",
+                "-bf",
+                "0",
+                "-aud",
+                "1",
+                "-f",
+                "h264",
+                "pipe:1",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+            .stdout;
+        // Split into access units the way the phone sends them.
+        let mut csd = Vec::new();
+        let mut aus: Vec<(bool, Vec<u8>)> = Vec::new();
+        for n in crate::mkv::split_nals(&raw) {
+            match n[0] & 0x1F {
+                9 => aus.push((false, Vec::new())),
+                7 | 8 if aus.len() <= 1 => {
+                    csd.extend_from_slice(&[0, 0, 0, 1]);
+                    csd.extend_from_slice(n);
+                }
+                6..=8 => {}
+                t => {
+                    let au = aus.last_mut().unwrap();
+                    au.0 |= t == 5;
+                    au.1.extend_from_slice(&[0, 0, 0, 1]);
+                    au.1.extend_from_slice(n);
+                }
+            }
+        }
+        aus.retain(|a| !a.1.is_empty());
+        let mut b = ReplayBuffer::new(90);
+        b.push(&Media::Config(VideoConfig {
+            codec: crate::mkv::CODEC_H264,
+            width: 2376,
+            height: 1080,
+            csd,
+        }));
+        let t0 = 9_000_000_000i64; // phone clocks don't start at zero
+        let mut audio_t = t0;
+        for (i, (key, au)) in aus.iter().enumerate() {
+            let pts = t0 + i as i64 * FRAME;
+            b.push(&Media::Video {
+                pts,
+                key: *key,
+                data: Arc::new(au.clone()),
+            });
+            while audio_t <= pts {
+                // 440 Hz tone, s16le stereo, 10 ms.
+                let pcm: Vec<u8> = (0..480)
+                    .flat_map(|k| {
+                        let t = ((audio_t - t0) / 10_000 * 480 + k) as f32 / 48_000.0;
+                        let v = ((t * 440.0 * std::f32::consts::TAU).sin() * 8000.0) as i16;
+                        [v.to_le_bytes(), v.to_le_bytes()].concat()
+                    })
+                    .collect();
+                b.push(&Media::Audio {
+                    pts: audio_t,
+                    pcm: Arc::new(pcm),
+                });
+                audio_t += 10_000;
+            }
+        }
+        let snap = b.snapshot(8).unwrap();
+        println!("snapshot covers {:.2} s", snap.seconds);
+        let dir = std::env::temp_dir().join("phonecast_clip_pictures");
+        std::fs::remove_dir_all(&dir).ok();
+
+        // Original: the phone picture copied as-is.
+        let original = snap.save(&dir, Some(&ffmpeg), "orig", None).unwrap();
+        let (w, h, secs, audio) = probe(&ffmpeg, &original);
+        println!(
+            "original: {} {w}x{h} {secs:.2} s audio={audio}",
+            original.display()
+        );
+        assert_eq!(original.extension().unwrap(), "mp4");
+        assert_eq!((w, h), (2376, 1080));
+        assert!(secs > 7.9 && secs < 10.5, "{secs}");
+        assert!(audio);
+
+        // Like the stream: YouTube's 1440p60 at 20 Mbps, blurred background.
+        let look = ClipLook {
+            encoder: enc.clone(),
+            framing: crate::live::Framing::Blur,
+            w: 2560,
+            h: 1440,
+            kbps: 20_000,
+        };
+        let started = std::time::Instant::now();
+        let framed = snap
+            .save(&dir, Some(&ffmpeg), "stream", Some(&look))
+            .unwrap();
+        let (w, h, secs, audio) = probe(&ffmpeg, &framed);
+        println!(
+            "like the stream: {} {w}x{h} {secs:.2} s audio={audio}, saved in {:?}",
+            framed.display(),
+            started.elapsed()
+        );
+        assert_eq!(
+            framed.extension().unwrap(),
+            "mp4",
+            "re-encode failed, MKV kept"
+        );
+        assert_eq!((w, h), (2560, 1440));
+        assert!(secs > 7.9 && secs < 10.5, "{secs}");
+        assert!(audio);
+        // Above and below the picture is the blurred copy, not black bars
+        // (black is ~16).
+        let edge = top_edge_luma(&ffmpeg, &framed);
+        println!("top-edge brightness: {edge:.1}");
+        assert!(edge > 30.0, "bars look black: {edge}");
+
+        // Fit framing for comparison: real black bars.
+        let fit = ClipLook {
+            framing: crate::live::Framing::Fit,
+            ..look
+        };
+        let bars = snap.save(&dir, Some(&ffmpeg), "fit", Some(&fit)).unwrap();
+        let edge = top_edge_luma(&ffmpeg, &bars);
+        println!("fit top-edge brightness: {edge:.1}");
+        assert!(edge < 20.0, "fit should have black bars: {edge}");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

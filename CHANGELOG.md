@@ -19,19 +19,13 @@ versions follow [SemVer](https://semver.org).
   **Ctrl+Shift+F8 / F9 / F10** save the last 15 / 30 / 60 s as an MP4 in
   `Videos\PhoneCast\Clips` without re-encoding (MKV when FFmpeg is not
   installed). A **Clips** button opens the folder; a Clips panel has the
-  three buttons and the buffer length.
+  three buttons and the buffer length. *Clip picture: like the stream*
+  instead re-encodes the clip on the GPU with the stream's 16:9 framing
+  (blurred background by default) at the YouTube quality (1440p60), at low
+  priority so a live stream is never slowed down.
 - **Global hotkeys** that work while the game has focus: clips, mute mic
   (Ctrl+Shift+M), record (Ctrl+Shift+R), go live / end (Ctrl+Shift+L).
   A Hotkeys sheet rebinds them; conflicts with other apps are reported.
-- **Dynamic bitrate**: when a live upload struggles (output below 0.95x
-  real time for 5 s, measured over the last few seconds) that destination
-  steps down its own ladder — YouTube 1440p60 20 Mbps → 1440p60 14 Mbps →
-  1080p60 9 Mbps; Twitch → 936p60 4.5 Mbps → 720p60 3.5 Mbps — restarting on
-  the next keyframe with the same framing while the other destination keeps
-  streaming. After 60 s of smooth upload it steps back up one rung. At most
-  one change a minute, since each restart is a short glitch for viewers.
-  The Live card and the diagnostics log say "Upload struggling → lowered to
-  1440p60 · 14.0 Mbps".
 - **Settings that survive device changes**: mic (by Windows endpoint ID),
   Discord source, monitor (by hardware ID) and webcam (by name) are
   remembered in `%APPDATA%\PhoneCast\settings.json`. A missing device gets

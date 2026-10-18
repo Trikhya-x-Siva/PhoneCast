@@ -766,7 +766,6 @@ impl Core {
                 framing: live::Framing::Fit,
                 pc: Some(pc.clone()),
                 file: true,
-                fallback: Vec::new(),
             };
             let cfg = VideoConfig {
                 codec: crate::mkv::CODEC_H264,
@@ -1022,6 +1021,7 @@ impl Core {
                 "seconds": r.seconds(),
                 "buffered": r.buffered_secs().round(),
                 "bytes": r.bytes(),
+                "look": self.prefs.lock().unwrap().clip_look,
             })
         };
         json!({
@@ -1074,13 +1074,23 @@ impl Core {
                 .ok_or("Nothing to clip yet — start the phone stream or PC capture first")?
         };
         let ffmpeg = self.live.ffmpeg();
+        // "Like the stream" only makes sense for the phone picture; the PC
+        // source is already 16:9 (its buffer is the 720p preview).
+        let look = (self.prefs.lock().unwrap().clip_look == "stream" && !self.is_pc_mode())
+            .then(|| self.live.clip_look());
         let c = self.clone();
         std::thread::Builder::new()
             .name("clip".into())
             .spawn(move || {
                 let dir = replay::clips_dir();
                 let label = format!("{seconds}s");
-                match snap.save(&dir, ffmpeg.as_deref(), &label) {
+                if look.is_some() {
+                    c.notify(
+                        "clip",
+                        format!("Saving the last {:.0} s like the stream…", snap.seconds),
+                    );
+                }
+                match snap.save(&dir, ffmpeg.as_deref(), &label, look.as_ref()) {
                     Ok(path) => {
                         let name = path
                             .file_name()
@@ -1096,6 +1106,18 @@ impl Core {
             })
             .map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    pub fn set_clip_look(&self, look: &str) {
+        let look = if look == "stream" {
+            "stream"
+        } else {
+            "original"
+        };
+        let mut p = self.prefs.lock().unwrap();
+        p.clip_look = look.into();
+        p.save();
+        diag::log("clip", format!("clip picture: {look}"));
     }
 
     pub fn set_replay_seconds(&self, seconds: u32) {

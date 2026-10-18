@@ -18,6 +18,9 @@ pub struct Device {
 pub struct Prefs {
     /// Seconds kept in the replay buffer; 0 = off.
     pub replay_seconds: u32,
+    /// "original" = the phone picture as-is (no re-encode);
+    /// "stream" = 16:9 with the stream's framing, re-encoded on the GPU.
+    pub clip_look: String,
     /// Hotkey per action id ("clip15" .. "live"); missing = default,
     /// empty string = unbound.
     pub hotkeys: BTreeMap<String, String>,
@@ -31,6 +34,7 @@ impl Default for Prefs {
     fn default() -> Self {
         Self {
             replay_seconds: crate::replay::DEFAULT_SECONDS,
+            clip_look: "original".into(),
             hotkeys: BTreeMap::new(),
             mic: None,
             voice_app: "auto".into(),
@@ -74,6 +78,7 @@ mod tests {
     fn missing_fields_take_defaults() {
         let p: Prefs = serde_json::from_str(r#"{"hotkeys":{"live":"Ctrl+Alt+L"}}"#).unwrap();
         assert_eq!(p.replay_seconds, 90);
+        assert_eq!(p.clip_look, "original");
         assert_eq!(p.voice_app, "auto");
         assert_eq!(p.hotkeys["live"], "Ctrl+Alt+L");
         assert!(p.mic.is_none());
