@@ -153,6 +153,7 @@ impl LiveSettings {
                 Framing::Blur => "blur",
                 Framing::Fit => "fit",
                 Framing::Fill => "fill",
+                Framing::Phone => "phone",
             }
             .into();
         }
@@ -661,7 +662,10 @@ impl Live {
         };
         ClipLook {
             encoder,
-            framing: Framing::parse(&s.framing),
+            framing: match Framing::parse(&s.framing) {
+                Framing::Phone => Framing::Blur,
+                f => f,
+            },
             w: preset.w,
             h: preset.h,
             preset,
@@ -778,6 +782,19 @@ impl Live {
             // ~15 s of buffer (video + 10 ms audio packets): rides out upload and
             // CPU hiccups instead of skipping ahead; adds no delay when all is well.
             let (tx, rx) = SinkTx::new(2400);
+            // Phone shape only where the platform shows any shape (YouTube,
+            // custom servers) and only for the phone picture.
+            let framing = match Framing::parse(&s.framing) {
+                Framing::Phone if !(pf.any_shape() && pc.is_none()) => Framing::Blur,
+                f => f,
+            };
+            let (w, h) = match framing {
+                Framing::Phone => phone_shape(p.h, config.width as u32, config.height as u32),
+                _ => (p.w, p.h),
+            };
+            if framing == Framing::Phone {
+                crate::diag::log("live", format!("{}: phone shape {w}x{h}", pf.name()));
+            }
             let job = Job {
                 ffmpeg: ffmpeg.clone(),
                 url,
@@ -786,11 +803,11 @@ impl Live {
                 } else {
                     enc.h264.clone()
                 },
-                w: p.w,
-                h: p.h,
+                w,
+                h,
                 kbps: p.kbps,
                 hevc: p.codec == Codec::Hevc,
-                framing: Framing::parse(&s.framing),
+                framing,
                 // Composited sources get one frame pipe per FFmpeg process.
                 pc: pc.as_ref().map(|p| Arc::new(p.for_job())),
                 file: false,
@@ -864,6 +881,11 @@ pub enum Framing {
     Fit,
     /// Fills the frame by cropping the sides (edge HUD may be cut).
     Fill,
+    /// The stream takes the phone's own shape (e.g. 2376×1080 at 1080p):
+    /// exactly the phone screen, no bars, blur, crop or stretch. YouTube and
+    /// custom servers only; other platforms get the blurred 16:9 framing.
+    /// Viewers on phones see it full screen; desktop players add thin bars.
+    Phone,
 }
 
 impl Framing {
@@ -871,9 +893,28 @@ impl Framing {
         match s {
             "fit" => Framing::Fit,
             "fill" => Framing::Fill,
+            "phone" => Framing::Phone,
             _ => Framing::Blur,
         }
     }
+}
+
+/// Output size in the phone's own shape at a preset's height: the long side
+/// is the width (games are landscape), even sizes. 2376×1080 at 1080 → the
+/// phone picture 1:1; a portrait start (home screen) gives the same shape,
+/// so a later rotation to the game still fits exactly.
+pub fn phone_shape(h: u32, src_w: u32, src_h: u32) -> (u32, u32) {
+    let (long, short) = (src_w.max(src_h), src_w.min(src_h));
+    if short == 0 || long * 9 <= short * 16 {
+        return ((h * 16 / 9) / 2 * 2, h); // not wider than 16:9
+    }
+    let w = ((h as u64 * long as u64) as f64 / short as f64 / 2.0).round() as u32 * 2;
+    // Hardware encoders stop at 4096 px wide: keep the shape, lower the height.
+    if w > 4096 {
+        let h = ((4096.0 * short as f64 / long as f64) / 2.0).round() as u32 * 2;
+        return (4096, h);
+    }
+    (w, h)
 }
 
 /// A clip re-encoded to look like the stream: same 16:9 framing (blurred
@@ -1508,7 +1549,7 @@ pub(crate) fn video_filter(
                      scale_cuda=format=yuv420p,fps=60,setsar=1[v]"
                 ),
             ),
-            Framing::Fit => (
+            Framing::Fit | Framing::Phone => (
                 &["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
                 format!("[0:v:0]{fit},pad_cuda={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=60,setsar=1[v]"),
             ),
@@ -1527,7 +1568,9 @@ pub(crate) fn video_filter(
                  [b]scale=384:216:force_original_aspect_ratio=increase,crop=384:216,{soften},scale={w}:{h}:flags=bilinear[bg];\
                  [bg][fg]overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2"
             ),
-            Framing::Fit => format!("[0:v:0]{fit},pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black"),
+            Framing::Fit | Framing::Phone => {
+                format!("[0:v:0]{fit},pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black")
+            }
             Framing::Fill => format!("[0:v:0]{crop16x9},scale={w}:{h}:flags=bicubic"),
         };
         (
@@ -2296,6 +2339,17 @@ mod tests {
         assert!(probe.starts_with("h264,1280,720"), "{probe}");
     }
 
+    #[test]
+    fn phone_shape_keeps_the_phone_picture_1_to_1() {
+        assert_eq!(phone_shape(1080, 2376, 1080), (2376, 1080));
+        assert_eq!(phone_shape(1080, 1080, 2376), (2376, 1080)); // portrait start
+        assert_eq!(phone_shape(1440, 2376, 1080), (3168, 1440));
+        assert_eq!(phone_shape(720, 2376, 1080), (1584, 720));
+        assert_eq!(phone_shape(2160, 2376, 1080), (4096, 1862)); // encoder width limit
+        assert_eq!(phone_shape(1080, 1920, 1080), (1920, 1080)); // already 16:9
+        assert_eq!(phone_shape(1080, 2048, 1536), (1920, 1080)); // 4:3 tablet
+    }
+
     /// The GPU filter graph must produce exactly the preset size, square
     /// pixels and clean edges for every framing (overlay_cuda used to pad
     /// 1080 → 1088, pad_cuda kept a 99:80 pixel shape, and scale_cuda left
@@ -2315,7 +2369,11 @@ mod tests {
             (2560, 1440),
             (3840, 2160),
         ] {
-            for framing in [Framing::Blur, Framing::Fit, Framing::Fill] {
+            for framing in [Framing::Blur, Framing::Fit, Framing::Fill, Framing::Phone] {
+                let (w, h) = match framing {
+                    Framing::Phone => phone_shape(h, 2376, 1080),
+                    _ => (w, h),
+                };
                 let (hw, filter) = video_filter(true, framing, w, h);
                 let st = Command::new(&ffmpeg)
                     .args(["-hide_banner", "-loglevel", "error", "-y"])

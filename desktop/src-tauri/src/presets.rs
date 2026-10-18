@@ -363,6 +363,13 @@ impl Platform {
         }
     }
 
+    /// Shows a stream of any shape (not only 16:9) correctly: YouTube does
+    /// (phones show a phone-shaped stream full screen); custom servers are
+    /// the user's call. Twitch, Kick and Facebook expect 16:9.
+    pub fn any_shape(self) -> bool {
+        matches!(self, Platform::Youtube | Platform::Custom)
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Platform::Youtube => "YouTube",
