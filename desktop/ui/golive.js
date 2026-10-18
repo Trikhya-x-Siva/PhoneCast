@@ -317,8 +317,9 @@
   // The banner design, for scenes drawn in the same style.
   window.getBannerSpec = () => bn;
   window.bannerDesignKey = () => {
-    const sig = (i) => (i ? i.src.length + i.src.slice(-48) : "");
-    const str = JSON.stringify([bn.style, bn.title, bn.line, bn.right, bn.color, bn.color2, sig(bn.logo), sig(bn.sceneBg), sig(bn.stripBg), sig(bn.poseWave), sig(bn.poseShush)]);
+    const v = bn.assetVer || {};
+    const sig = (k) => (bn[k] ? "v" + (v[k] || 0) : "");
+    const str = JSON.stringify([bn.style, bn.title, bn.line, bn.right, bn.color, bn.color2, sig("logo"), sig("image"), sig("sceneBg"), sig("stripBg"), sig("poseWave"), sig("poseShush")]);
     let h = 2166136261;
     for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
     return (h >>> 0).toString(36);
@@ -336,23 +337,30 @@
       saving = saving.then(saveBannerNow).catch((e) => toast(String(e)));
     }, 800);
   }
+  const ASSETS = ["logo", "image", "sceneBg", "stripBg", "poseWave", "poseShush"];
+  let savedKey = null;
   async function saveBannerNow() {
     const H = stripHeight();
+    const key = window.bannerDesignKey() + "@" + H;
+    if (key === savedKey) return; // nothing changed: keep the made banner
     const off = document.createElement("canvas");
     off.width = canvas.width;
     off.height = H;
     const g = off.getContext("2d");
-    const src = (i) => (i ? i.src : null);
-    const spec = { style: bn.style, title: bn.title, line: bn.line, right: bn.right, color: bn.color, color2: bn.color2, logo: src(bn.logo), image: src(bn.image), sceneBg: src(bn.sceneBg), stripBg: src(bn.stripBg), poseWave: src(bn.poseWave), poseShush: src(bn.poseShush) };
+    // Pictures are files of their own; the settings only say which exist.
+    const spec = { style: bn.style, title: bn.title, line: bn.line, right: bn.right, color: bn.color, color2: bn.color2, assetVer: bn.assetVer || {}, savedKey: key };
+    for (const k of ASSETS) spec[k] = bn[k] ? "asset" : null;
     BannerArt.draw(g, off.width, H, bn, 0);
     const first = await toPng(off);
-    await invoke("save_banner", { png: Array.from(first), spec });
-    // Moving banner: a 20 s loop (Subscribe pop-up in its last 4 s).
+    await invoke("save_banner", first, { headers: { "x-spec": encodeURIComponent(JSON.stringify(spec)) } });
+    // Moving banner: a 20 s loop (Subscribe pop-up in its last 4 s), drawn a
+    // few frames at a time so the window stays responsive.
     const n = BannerArt.animated(bn) ? BannerArt.BANNER_LOOP_SECONDS * BannerArt.FPS : 0;
     const frames = [];
     for (let i = 0; i < n; i++) {
       BannerArt.bannerAt(g, off.width, H, bn, i / BannerArt.FPS);
       frames.push(await toJpeg(off));
+      if (i % 6 === 5) await new Promise((r) => setTimeout(r, 0));
     }
     const total = frames.reduce((a, f) => a + f.length, 0);
     const body = new Uint8Array(total);
@@ -364,6 +372,7 @@
     await invoke("save_banner_frames", body, {
       headers: { "x-sizes": frames.map((f) => f.length).join(","), "x-fps": String(BannerArt.FPS) },
     });
+    savedKey = key;
   }
 
   function showBannerEditor() {
@@ -385,27 +394,38 @@
     $(id).addEventListener("change", (e) => {
       const f = e.target.files[0];
       if (!f) return;
-      const r = new FileReader();
-      r.onload = async () => {
+      (async () => {
         try {
-          bn[key] = await loadImage(r.result);
+          const bytes = new Uint8Array(await f.arrayBuffer());
+          bn[key] = await loadImage(URL.createObjectURL(new Blob([bytes], { type: f.type || "image/png" })));
+          await invoke("save_banner_asset", bytes, { headers: { "x-name": key } });
+          bn.assetVer = { ...(bn.assetVer || {}), [key]: Date.now() };
           saveBannerSoon();
         } catch {
           toast("Could not read that image");
         }
-      };
-      r.readAsDataURL(f);
+      })();
     });
+  }
+
+  async function loadAsset(k, v) {
+    if (!v) return null;
+    if (typeof v === "string" && v.startsWith("data:")) {
+      // Old settings kept pictures inline: move them to their own file.
+      const bytes = new Uint8Array(await (await fetch(v)).arrayBuffer());
+      await invoke("save_banner_asset", bytes, { headers: { "x-name": k } }).catch(() => {});
+      return loadImage(v);
+    }
+    const buf = await invoke("get_banner_asset", { name: k });
+    return loadImage(URL.createObjectURL(new Blob([buf])));
   }
 
   invoke("get_banner").then(async (s) => {
     if (!s) return drawBanner();
-    Object.assign(bn, { style: s.style || "blitz", title: s.title || "", line: s.line || "", right: s.right ?? "BGMI LIVE", color: s.color || "#8b5cf6", color2: s.color2 || "#22d3ee" });
-    if (s.logo) bn.logo = await loadImage(s.logo).catch(() => null);
-    if (s.image) bn.image = await loadImage(s.image).catch(() => null);
-    for (const k of ["sceneBg", "stripBg", "poseWave", "poseShush"]) {
-      if (s[k]) bn[k] = await loadImage(s[k]).catch(() => null);
-    }
+    Object.assign(bn, { style: s.style || "blitz", title: s.title || "", line: s.line || "", right: s.right ?? "BGMI LIVE", color: s.color || "#8b5cf6", color2: s.color2 || "#22d3ee", assetVer: s.assetVer || {} });
+    for (const k of ASSETS) bn[k] = await loadAsset(k, s[k]).catch(() => null);
+    // Already made and unchanged: no re-render at start.
+    if (s._loop && s.savedKey) savedKey = s.savedKey;
     $("bnTitle").value = bn.title;
     $("bnLine").value = bn.line;
     $("bnRight").value = bn.right;

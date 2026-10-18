@@ -50,12 +50,12 @@ fn request_keyframe(core: CoreState) -> bool {
     core.request_keyframe_for_preview()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn start_recording(core: CoreState) -> Result<String, String> {
     core.start_recording()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn stop_recording(core: CoreState) -> Result<String, String> {
     core.stop_recording()
 }
@@ -76,7 +76,7 @@ fn set_audio_channel(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_mic_device(core: CoreState, id: Option<String>, name: Option<String>) {
     core.set_mic(id, name);
 }
@@ -86,19 +86,30 @@ fn set_voice_app(core: CoreState, id: String) {
     core.set_voice_app(&id);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save_clip(core: CoreState, seconds: u32) -> Result<(), String> {
     core.save_clip(seconds)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_game_mode(core: CoreState, on: bool) {
     core.set_game_mode(on);
 }
 
-/// Saves the banner made in the banner editor (PNG) and its settings.
-#[tauri::command]
-fn save_banner(png: Vec<u8>, spec: serde_json::Value) -> Result<(), String> {
+/// Saves the banner made in the banner editor: the PNG as the raw body, its
+/// (small) settings as JSON in the `x-spec` header. Runs off the window's
+/// main thread: big payloads there froze the window ("Not responding").
+#[tauri::command(async)]
+fn save_banner(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(png) = request.body() else {
+        return Err("expected the banner image".into());
+    };
+    let spec: serde_json::Value = request
+        .headers()
+        .get("x-spec")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| serde_json::from_str(&urlencoding_decode(s)).ok())
+        .ok_or("missing banner settings")?;
     if !png.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) || png.len() > 8 << 20 {
         return Err("Not a PNG image".into());
     }
@@ -106,7 +117,7 @@ fn save_banner(png: Vec<u8>, spec: serde_json::Value) -> Result<(), String> {
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&p, &png).map_err(|e| e.to_string())?;
+    std::fs::write(&p, png).map_err(|e| e.to_string())?;
     std::fs::write(p.with_extension("json"), spec.to_string()).map_err(|e| e.to_string())?;
     diag::log("live", format!("banner saved ({} KB)", png.len() / 1024));
     Ok(())
@@ -286,23 +297,95 @@ fn set_scene_music(core: CoreState, request: tauri::ipc::Request<'_>) -> Result<
     core.load_scene_music()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn scene_ready(core: CoreState, name: String, design: String) -> bool {
     core.scene_ready(&name, &design)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_scene(core: CoreState, name: Option<String>, design: String) -> Result<(), String> {
     core.set_scene(name.as_deref(), &design)
 }
 
-/// The banner editor's last settings (or null).
-#[tauri::command]
+/// Decodes the %XX escapes of `encodeURIComponent` (headers are ASCII).
+fn urlencoding_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Folder of the banner's pictures (logo, own image, scene art, poses).
+fn banner_assets_dir() -> std::path::PathBuf {
+    live::banner_path().with_file_name("art").join("banner")
+}
+
+/// Only these names: the asset name comes from the UI and becomes a path.
+fn asset_name_ok(name: &str) -> bool {
+    matches!(
+        name,
+        "logo" | "image" | "sceneBg" | "stripBg" | "poseWave" | "poseShush"
+    )
+}
+
+/// The banner editor's last settings (or null). `_loop` says whether the
+/// moving banner is already made (then the app need not re-render it).
+#[tauri::command(async)]
 fn get_banner() -> serde_json::Value {
-    std::fs::read(live::banner_path().with_extension("json"))
+    let mut v: serde_json::Value = std::fs::read(live::banner_path().with_extension("json"))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or(serde_json::Value::Null)
+        .unwrap_or(serde_json::Value::Null);
+    if let Some(o) = v.as_object_mut() {
+        o.insert("_loop".into(), live::banner_frames_dir().is_some().into());
+    }
+    v
+}
+
+/// One banner picture's bytes (binary, not JSON).
+#[tauri::command(async)]
+fn get_banner_asset(name: String) -> Result<tauri::ipc::Response, String> {
+    if !asset_name_ok(&name) {
+        return Err("unknown banner picture".into());
+    }
+    std::fs::read(banner_assets_dir().join(&name))
+        .map(tauri::ipc::Response::new)
+        .map_err(|e| e.to_string())
+}
+
+/// Saves one banner picture (raw body; empty body removes it).
+#[tauri::command(async)]
+fn save_banner_asset(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
+        return Err("expected the picture".into());
+    };
+    let name = request
+        .headers()
+        .get("x-name")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    if !asset_name_ok(&name) || body.len() > 30 << 20 {
+        return Err("unknown or too big banner picture".into());
+    }
+    let dir = banner_assets_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    if body.is_empty() {
+        std::fs::remove_file(dir.join(&name)).ok();
+        return Ok(());
+    }
+    std::fs::write(dir.join(&name), body).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -328,7 +411,7 @@ fn get_hotkeys(core: CoreState) -> Value {
 }
 
 /// `bindings`: action id -> key text. Returns the problems found, if any.
-#[tauri::command]
+#[tauri::command(async)]
 fn set_hotkeys(core: CoreState, bindings: hotkeys::Bindings) -> Value {
     let probs = core.set_hotkeys(&bindings);
     json!({
@@ -342,12 +425,12 @@ fn set_audio_option(core: CoreState, name: String, on: bool) {
     core.mixer.set_option(&name, on);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_live_settings(core: CoreState) -> Value {
     core.live.settings_json()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save_live_settings(core: CoreState, settings: Value) -> Result<Value, String> {
     core.live.update_settings(&settings)?;
     Ok(core.live.settings_json())
@@ -360,7 +443,7 @@ fn apply_live_now(core: CoreState) -> Result<(), String> {
 }
 
 /// Validates an unsaved Go live edit: platform limits + upload budget.
-#[tauri::command]
+#[tauri::command(async)]
 fn check_live_settings(core: CoreState, settings: Value) -> Result<Value, String> {
     core.live.check_settings(&settings)
 }
@@ -436,22 +519,22 @@ async fn setup_upload_test(app: tauri::AppHandle, core: CoreState<'_>) -> Result
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn start_live(core: CoreState) -> Result<(), String> {
     core.start_live()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn stop_live(core: CoreState) {
     core.stop_live();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_sources(core: CoreState) -> Value {
     core.refresh_sources()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_source(core: CoreState, settings: capture::SourceSettings) -> Result<(), String> {
     core.set_source(settings)
 }
@@ -493,7 +576,7 @@ fn ai_get_settings(ai: AiState) -> Value {
     ai.settings_json()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn ai_save_settings(ai: AiState, settings: Value) -> Result<Value, String> {
     ai.update_settings(settings)?;
     Ok(ai.settings_json())
@@ -649,6 +732,8 @@ fn main() {
             set_replay_seconds,
             set_game_mode,
             save_banner,
+            get_banner_asset,
+            save_banner_asset,
             apply_live_now,
             save_banner_frames,
             prepare_scene,

@@ -982,6 +982,7 @@ async function prepareScene(name) {
     if (action) BannerArt.stinger(g, c.width, c.height, spec, i / n);
     else BannerArt.scene(g, c.width, c.height, spec, name, i / n);
     frames.push(await new Promise((ok) => c.toBlob(async (b) => ok(new Uint8Array(await b.arrayBuffer())), "image/jpeg", 0.92)));
+    if (i % 6 === 5) await new Promise((r) => setTimeout(r, 0)); // keep the window responsive
   }
   const body = new Uint8Array(frames.reduce((a, f) => a + f.length, 0));
   let at = 0;
