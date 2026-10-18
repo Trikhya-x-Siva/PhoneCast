@@ -16,7 +16,9 @@ Open an issue with:
 - **Phone app:** JDK 17 and the Android SDK. `android\build-and-install.bat`
   builds a release APK and installs it on the USB-connected phone.
 - **Tests:** `cargo test` in `desktop/src-tauri`. Some tests are `#[ignore]`
-  because they need a sample stream or a running app; see their comments.
+  because they need a sample stream, FFmpeg or a GPU; see their comments.
+- **Two instances:** set `PHONECAST_PORT=27283` to run a development build
+  next to the installed app (the phone and preview ports move together).
 
 ## Pull requests
 - One change per PR, with a short description of *why*.

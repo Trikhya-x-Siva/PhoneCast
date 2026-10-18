@@ -270,6 +270,7 @@ function render(s) {
   if (s.mixer) renderMixer(s.mixer);
   renderLive(s.live);
   renderSource(s);
+  renderReplay(s.replay);
 }
 
 // ---------------- source: phone or this PC ----------------
@@ -294,7 +295,11 @@ const srcUI = {
 
 function captureValue(src) {
   if (src.kind === "window") return `window:${src.hwnd}`;
-  if (src.kind === "screen") return `screen:${src.output}`;
+  if (src.kind === "screen") {
+    // Prefer the monitor's stable hardware ID: Windows may renumber screens.
+    const m = src.id && sourcesData.monitors.find((x) => x.id === src.id);
+    return `screen:${m ? m.output : src.output}`;
+  }
   return "";
 }
 
@@ -308,7 +313,8 @@ function currentSource() {
       const old = srcState.source.kind === "window" ? srcState.source : {};
       source = { kind: "window", hwnd: Number(id), title: w?.title ?? old.title ?? "", process: w?.process ?? old.process ?? "" };
     } else {
-      source = { kind: "screen", output: Number(id || 0) };
+      const m = sourcesData.monitors.find((x) => String(x.output) === id);
+      source = { kind: "screen", output: Number(id || 0), id: m?.id || "" };
     }
   }
   const cam = srcState.webcam || {};
@@ -413,6 +419,11 @@ function renderSource(s) {
   srcUI.err.classList.toggle("hidden", !err);
   srcUI.layer.classList.toggle("hidden", !pc);
   renderOverlayBoxes();
+  // Devices that are not connected: say so plainly, never switch silently.
+  const warn = $("deviceWarnings");
+  const list = s.deviceWarnings || [];
+  warn.classList.toggle("hidden", list.length === 0);
+  warn.innerHTML = list.map((w) => `<p>${escapeHtml(w)}</p>`).join("");
   if (performance.now() - sourceTouchedAt < 1500) return;
 
   srcState = { source: s.source.source, webcam: s.source.webcam || {}, overlays: s.source.overlays || [] };
@@ -774,6 +785,7 @@ modal.addEventListener("click", (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !modal.classList.contains("hidden")) closeModal();
+  if (e.key === "Escape") $("hotkeysModal").classList.add("hidden");
 });
 
 $("liveSave").onclick = async () => {
@@ -915,11 +927,13 @@ function renderMixer(m) {
 
   const key = JSON.stringify(m.micDevices);
   const sel = $("micSelect");
-  if (key !== micListKey) {
-    micListKey = key;
-    sel.innerHTML = '<option value="">Windows default mic</option>' +
+  const missing = m.micMissing && m.micDevice ? `<option value="${m.micDevice.replace(/"/g, "&quot;")}">${escapeHtml(m.micName || "Chosen mic")} (not connected)</option>` : "";
+  if (key + missing !== micListKey) {
+    micListKey = key + missing;
+    sel.innerHTML = '<option value="">Windows default mic</option>' + missing +
       m.micDevices.map((d) => `<option value="${d.id.replace(/"/g, "&quot;")}">${escapeHtml(d.name)}</option>`).join("");
   }
+  strips.mic.el.classList.toggle("missing", !!m.micMissing);
   if (document.activeElement !== sel) sel.value = m.micDevice ?? "";
 
   // Where Discord runs: the app or a browser tab.
@@ -943,8 +957,9 @@ function escapeHtml(s) {
 }
 
 $("micSelect").addEventListener("change", (e) => {
-  invoke("set_mic_device", { id: e.target.value || null });
-  toast(`Mic: ${e.target.selectedOptions[0].textContent}`);
+  const name = e.target.selectedOptions[0].textContent;
+  invoke("set_mic_device", { id: e.target.value || null, name: e.target.value ? name : null });
+  toast(`Mic: ${name}`);
 });
 $("voiceSelect").addEventListener("change", (e) => {
   invoke("set_voice_app", { id: e.target.value });
@@ -1011,6 +1026,128 @@ $("recBtn").onclick = async () => {
   }
 };
 $("folderBtn").onclick = () => invoke("open_recordings");
+$("clipsBtn").onclick = () => invoke("open_clips");
+
+// ---------------- clips (replay buffer) ----------------
+
+for (const b of document.querySelectorAll(".clip")) {
+  b.addEventListener("click", async () => {
+    try {
+      await invoke("save_clip", { seconds: Number(b.dataset.secs) });
+      toast(`Saving the last ${b.dataset.secs} s…`);
+    } catch (e) {
+      toast(String(e));
+    }
+  });
+}
+let replayTouchedAt = 0;
+$("replaySelect").addEventListener("change", (e) => {
+  replayTouchedAt = performance.now();
+  const secs = Number(e.target.value);
+  invoke("set_replay_seconds", { seconds: secs });
+  toast(secs ? `Keeping the last ${secs} s for clips` : "Replay buffer off");
+});
+$("clipLook").addEventListener("change", (e) => {
+  replayTouchedAt = performance.now();
+  invoke("set_clip_look", { look: e.target.value });
+  toast(e.target.value === "stream"
+    ? "Clips will be framed like the stream (re-encoded on your GPU)"
+    : "Clips keep the original phone picture");
+});
+function renderReplay(r) {
+  if (!r) return;
+  if (performance.now() - replayTouchedAt > 1500 && document.activeElement !== $("replaySelect")) {
+    $("replaySelect").value = String(r.seconds);
+  }
+  if (performance.now() - replayTouchedAt > 1500 && document.activeElement !== $("clipLook") && r.look) {
+    $("clipLook").value = r.look;
+  }
+  const mb = (r.bytes / 1048576).toFixed(0);
+  $("replayHint").textContent = r.seconds
+    ? `${r.buffered} s ready (${mb} MB in memory). Clips are saved as MP4 in Videos\\PhoneCast\\Clips without re-encoding.`
+    : "Turn the buffer on to save clips of what just happened. It lives in memory only.";
+  for (const b of document.querySelectorAll(".clip")) b.disabled = !r.seconds || r.buffered < 1;
+}
+
+// Short messages from the app itself: clip saved, hotkey pressed, problems.
+listen("notice", (e) => toast(e.payload.text));
+
+// ---------------- hotkeys ----------------
+
+const hkModal = $("hotkeysModal");
+let hkActions = [];
+const MOD_CODES = new Set(["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "AltLeft", "AltRight", "MetaLeft", "MetaRight"]);
+
+// Turns a keydown into "Ctrl+Shift+F8" text the app understands.
+function comboFromEvent(e) {
+  if (MOD_CODES.has(e.code)) return null;
+  const parts = [];
+  if (e.ctrlKey) parts.push("Ctrl");
+  if (e.shiftKey) parts.push("Shift");
+  if (e.altKey) parts.push("Alt");
+  if (e.metaKey) parts.push("Win");
+  let key = e.code;
+  if (/^Key[A-Z]$/.test(key)) key = key.slice(3);
+  else if (/^Digit[0-9]$/.test(key)) key = key.slice(5);
+  else if (key.startsWith("Arrow")) key = key.slice(5);
+  else if (key === "Escape") return null;
+  parts.push(key);
+  return parts.join("+");
+}
+
+function renderHotkeyRows(data) {
+  if (!data) return;
+  hkActions = data.actions;
+  $("hotkeyRows").innerHTML = data.actions
+    .map((a) => `<div class="hk" data-id="${a.id}">
+      <label>${escapeHtml(a.label)}</label>
+      <input type="text" readonly value="${escapeHtml(a.keys)}" placeholder="Not set" class="${a.problem ? "bad" : ""}" title="Click, then press the keys">
+      <button class="clear" title="Clear"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      ${a.problem ? `<span class="problem">${escapeHtml(a.problem)}</span>` : ""}
+    </div>`)
+    .join("");
+  for (const row of $("hotkeyRows").querySelectorAll(".hk")) {
+    const input = row.querySelector("input");
+    input.addEventListener("keydown", (e) => {
+      e.preventDefault();
+      if (e.key === "Backspace" || e.key === "Delete") { input.value = ""; return; }
+      const c = comboFromEvent(e);
+      if (c) input.value = c;
+    });
+    row.querySelector(".clear").onclick = () => (input.value = "");
+  }
+  // Show the current keys on the clip buttons.
+  for (const a of data.actions) {
+    const el = $(`hk-${a.id}`);
+    if (el) el.textContent = a.keys || "";
+  }
+}
+function collectHotkeys() {
+  const out = {};
+  for (const row of $("hotkeyRows").querySelectorAll(".hk")) out[row.dataset.id] = row.querySelector("input").value.trim();
+  return out;
+}
+async function openHotkeys() {
+  renderHotkeyRows(await invoke("get_hotkeys"));
+  hkModal.classList.remove("hidden");
+}
+$("hotkeysBtn").onclick = openHotkeys;
+hkModal.addEventListener("click", (e) => {
+  if (e.target === hkModal || e.target.closest("[data-close]")) hkModal.classList.add("hidden");
+});
+$("hotkeysReset").onclick = () => {
+  for (const row of $("hotkeyRows").querySelectorAll(".hk")) {
+    const a = hkActions.find((x) => x.id === row.dataset.id);
+    row.querySelector("input").value = a ? a.default : "";
+  }
+};
+$("hotkeysSave").onclick = async () => {
+  const res = await invoke("set_hotkeys", { bindings: collectHotkeys() });
+  renderHotkeyRows(res.hotkeys);
+  if (res.problems.length) toast(`Saved, but ${res.problems.length} hotkey${res.problems.length > 1 ? "s need" : " needs"} attention`);
+  else { toast("Hotkeys saved"); hkModal.classList.add("hidden"); }
+};
+invoke("get_hotkeys").then(renderHotkeyRows).catch(() => {});
 $("keyBtn").onclick = () => invoke("request_keyframe");
 $("logBtn").onclick = () => invoke("open_logs");
 

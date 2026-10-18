@@ -117,6 +117,10 @@ struct State {
     mic: Channel,
     mic_devices: Vec<(String, String)>, // (id, name)
     mic_device: Option<String>,         // None = Windows default
+    /// Name of the chosen mic, kept so it can be named when it is unplugged.
+    mic_name: Option<String>,
+    /// The chosen mic is not connected right now (we never switch to another).
+    mic_missing: bool,
     mic_generation: u64,
     /// Where Discord voice comes from: "auto", "discord" or a browser id.
     voice_app: String,
@@ -163,6 +167,8 @@ impl Mixer {
                 mic: Channel::new("Starting…"),
                 mic_devices: Vec::new(),
                 mic_device: None,
+                mic_name: None,
+                mic_missing: false,
                 mic_generation: 0,
                 voice_app: "auto".into(),
                 voice_generation: 0,
@@ -318,10 +324,39 @@ impl Mixer {
         }
     }
 
-    pub fn set_mic_device(&self, id: Option<String>) {
+    /// Chooses the mic by its Windows endpoint ID (None = Windows default).
+    /// `name` is remembered for the "not connected" warning.
+    pub fn set_mic_device(&self, id: Option<String>, name: Option<String>) {
         let mut s = self.state.lock().unwrap();
         s.mic_device = id.filter(|i| !i.is_empty());
+        s.mic_name = if s.mic_device.is_some() {
+            name.filter(|n| !n.is_empty()).or_else(|| {
+                let id = s.mic_device.clone()?;
+                s.mic_devices
+                    .iter()
+                    .find(|d| d.0 == id)
+                    .map(|d| d.1.clone())
+            })
+        } else {
+            None
+        };
+        s.mic_missing = false;
         s.mic_generation += 1;
+    }
+
+    /// The chosen mic as (id, name), for saving.
+    pub fn mic_device(&self) -> Option<(String, String)> {
+        let s = self.state.lock().unwrap();
+        let id = s.mic_device.clone()?;
+        Some((id, s.mic_name.clone().unwrap_or_default()))
+    }
+
+    pub fn voice_app(&self) -> String {
+        self.state.lock().unwrap().voice_app.clone()
+    }
+
+    pub fn mic_muted(&self) -> bool {
+        self.state.lock().unwrap().mic.muted
     }
 
     pub fn set_voice_app(&self, id: &str) {
@@ -392,6 +427,8 @@ impl Mixer {
             "mic": s.mic.json(),
             "micDevices": s.mic_devices.iter().map(|(id, name)| json!({"id": id, "name": name})).collect::<Vec<_>>(),
             "micDevice": s.mic_device,
+            "micName": s.mic_name,
+            "micMissing": s.mic_missing,
             "voiceApp": s.voice_app,
             "voiceApps": VOICE_APPS.iter().map(|a| json!({
                 "id": a.0, "label": a.1, "running": s.voice_running.contains(&a.0),
@@ -599,8 +636,36 @@ mod capture {
                 initialize_mta().ok().ok();
                 loop {
                     refresh_devices(&mixer);
-                    let (generation, device) =
-                        mixer.with(|s| (s.mic_generation, s.mic_device.clone()));
+                    let (generation, device, missing_name) = mixer.with(|s| {
+                        let missing = s
+                            .mic_device
+                            .as_ref()
+                            .filter(|id| !s.mic_devices.iter().any(|d| d.0 == **id))
+                            .map(|_| s.mic_name.clone().unwrap_or_else(|| "Your mic".into()));
+                        (s.mic_generation, s.mic_device.clone(), missing)
+                    });
+                    if let Some(name) = missing_name {
+                        // The chosen mic is unplugged: say so and wait for it
+                        // rather than silently streaming from another mic.
+                        mixer.with(|s| {
+                            if !s.mic_missing {
+                                crate::diag::log("audio", format!("mic not connected: {name}"));
+                            }
+                            s.mic_missing = true;
+                            s.mic.active = false;
+                            s.mic.fifo.clear();
+                            s.mic.status =
+                                format!("{name} is not connected — plug it in or pick another mic");
+                        });
+                        for _ in 0..20 {
+                            if mixer.with(|s| s.mic_generation) != generation {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                        continue;
+                    }
+                    mixer.with(|s| s.mic_missing = false);
                     if let Err(e) = capture_mic(&mixer, generation, device) {
                         mixer.with(|s| {
                             s.mic.active = false;

@@ -23,7 +23,7 @@ wasapi = "0.26"
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_Security_Cryptography",
   "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Pipes", "Win32_System_IO", "Win32_Storage_FileSystem",
-  "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_UI_Controls_Dialogs",
+  "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_UI_Controls_Dialogs",
 ] }
 # Window / game capture (Windows Graphics Capture) and the D3D11 compositor
 windows-capture = "2.0.1"

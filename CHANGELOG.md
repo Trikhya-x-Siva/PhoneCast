@@ -21,6 +21,23 @@ versions follow [SemVer](https://semver.org).
 - **Overlays**: add PNG images (your logo) and text, drag them into place
   and resize them right on the preview; the webcam can be dragged too.
   Composed on the GPU in Direct3D 11 and changed live, even while streaming.
+- **Instant clips (replay buffer)**: the last 90 s (adjustable, 30 s to
+  5 min, or off) of the phone stream or PC capture are kept in memory;
+  **Ctrl+Shift+F8 / F9 / F10** save the last 15 / 30 / 60 s as an MP4 in
+  `Videos\PhoneCast\Clips` without re-encoding (MKV when FFmpeg is not
+  installed). A **Clips** button opens the folder; a Clips panel has the
+  three buttons and the buffer length. *Clip picture: like the stream*
+  instead re-encodes the clip on the GPU with the stream's 16:9 framing
+  (blurred background by default) at the YouTube quality (1440p60), at low
+  priority so a live stream is never slowed down.
+- **Global hotkeys** that work while the game has focus: clips, mute mic
+  (Ctrl+Shift+M), record (Ctrl+Shift+R), go live / end (Ctrl+Shift+L).
+  A Hotkeys sheet rebinds them; conflicts with other apps are reported.
+- **Settings that survive device changes**: mic (by Windows endpoint ID),
+  Discord source, monitor (by hardware ID) and webcam (by name) are
+  remembered in `%APPDATA%\PhoneCast\settings.json`. A missing device gets
+  a plain-language warning and PhoneCast waits for it instead of quietly
+  switching to another one.
 - **PC streaming**: capture a monitor on the GPU (Desktop Duplication →
   NVENC, zero-copy at native size), optional webcam picture-in-picture, PC
   sound in the mixer with Discord kept separate; record and go live from

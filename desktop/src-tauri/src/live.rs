@@ -412,6 +412,25 @@ impl Live {
         self.ffmpeg.clone()
     }
 
+    /// How a clip saved "like the stream" looks: the stream's framing at the
+    /// YouTube quality (1440p60 by default), on the best encoder.
+    pub fn clip_look(&self) -> ClipLook {
+        let s = self.settings.lock().unwrap().clone();
+        let p = preset(YOUTUBE, &s.youtube.quality);
+        let encoder = match (self.encoders.lock().unwrap().clone(), &self.ffmpeg) {
+            (Some(e), _) => e.h264,
+            (None, Some(ff)) => probe_encoders(ff).h264,
+            (None, None) => "libx264".into(),
+        };
+        ClipLook {
+            encoder,
+            framing: Framing::parse(&s.framing),
+            w: p.w,
+            h: p.h,
+            kbps: p.kbps,
+        }
+    }
+
     /// Encoder for the PC-mode recorder (file, visually lossless).
     pub fn encoders_for_file(&self) -> Option<(String, PathBuf)> {
         let ff = self.ffmpeg.clone()?;
@@ -601,6 +620,51 @@ impl Framing {
             _ => Framing::Blur,
         }
     }
+}
+
+/// A clip re-encoded to look like the stream: same 16:9 framing (blurred
+/// background by default), same size and bitrate as the YouTube preset.
+pub struct ClipLook {
+    pub encoder: String,
+    pub framing: Framing,
+    pub w: u32,
+    pub h: u32,
+    pub kbps: u32,
+}
+
+impl ClipLook {
+    /// FFmpeg arguments that go before `-i` (hardware decoding).
+    pub fn input_args(&self) -> Vec<String> {
+        let (hwaccel, _) =
+            video_filter(self.encoder.contains("nvenc"), self.framing, self.w, self.h);
+        hwaccel.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// FFmpeg arguments after `-i`: the stream's filter graph and encoder.
+    pub fn output_args(&self) -> Vec<String> {
+        let (_, graph) = video_filter(self.encoder.contains("nvenc"), self.framing, self.w, self.h);
+        let mut a: Vec<String> = vec![
+            "-filter_complex".into(),
+            graph,
+            "-map".into(),
+            "[v]".into(),
+            "-map".into(),
+            "0:a:0?".into(),
+        ];
+        a.extend(encoder_args(
+            &self.encoder,
+            self.kbps,
+            false,
+            self.w >= 3840,
+        ));
+        a
+    }
+}
+
+/// The best working H.264 encoder on this PC (GPU first).
+#[cfg(test)]
+pub fn best_h264(ffmpeg: &PathBuf) -> String {
+    probe_encoders(ffmpeg).h264
 }
 
 // ---------------- one destination ----------------

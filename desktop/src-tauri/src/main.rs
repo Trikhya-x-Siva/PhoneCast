@@ -8,8 +8,11 @@ mod capture;
 mod compositor;
 mod core;
 mod diag;
+mod hotkeys;
 mod live;
 mod mkv;
+mod prefs;
+mod replay;
 mod sinks;
 
 use crate::core::Core;
@@ -23,7 +26,7 @@ type CoreState<'a> = State<'a, Arc<Core>>;
 fn get_info(core: CoreState) -> Value {
     json!({
         "previewPort": *core.preview_port.lock().unwrap(),
-        "phonePort": core::PHONE_PORT,
+        "phonePort": core::phone_port(),
         "lanIp": core::lan_ip(),
         "recordingsDir": core::recordings_dir().display().to_string(),
     })
@@ -66,13 +69,50 @@ fn set_audio_channel(
 }
 
 #[tauri::command]
-fn set_mic_device(core: CoreState, id: Option<String>) {
-    core.mixer.set_mic_device(id);
+fn set_mic_device(core: CoreState, id: Option<String>, name: Option<String>) {
+    core.set_mic(id, name);
 }
 
 #[tauri::command]
 fn set_voice_app(core: CoreState, id: String) {
-    core.mixer.set_voice_app(&id);
+    core.set_voice_app(&id);
+}
+
+#[tauri::command]
+fn save_clip(core: CoreState, seconds: u32) -> Result<(), String> {
+    core.save_clip(seconds)
+}
+
+#[tauri::command]
+fn set_replay_seconds(core: CoreState, seconds: u32) {
+    core.set_replay_seconds(seconds);
+}
+
+#[tauri::command]
+fn set_clip_look(core: CoreState, look: String) {
+    core.set_clip_look(&look);
+}
+
+#[tauri::command]
+fn open_clips() {
+    let dir = replay::clips_dir();
+    std::fs::create_dir_all(&dir).ok();
+    std::process::Command::new("explorer").arg(dir).spawn().ok();
+}
+
+#[tauri::command]
+fn get_hotkeys(core: CoreState) -> Value {
+    core.hotkeys_json()
+}
+
+/// `bindings`: action id -> key text. Returns the problems found, if any.
+#[tauri::command]
+fn set_hotkeys(core: CoreState, bindings: hotkeys::Bindings) -> Value {
+    let probs = core.set_hotkeys(&bindings);
+    json!({
+        "problems": probs.iter().map(|(id, p)| json!({"id": id, "problem": p})).collect::<Vec<_>>(),
+        "hotkeys": core.hotkeys_json(),
+    })
 }
 
 #[tauri::command]
@@ -206,7 +246,7 @@ fn main() {
             let core = Core::start(app.handle().clone()).map_err(|e| {
                 format!(
                     "PhoneCast could not open port {}: {e}. Is it already running?",
-                    core::PHONE_PORT
+                    core::phone_port()
                 )
             })?;
             let ai = ai::Ai::new(app.handle().clone(), core.mixer.clone());
@@ -254,7 +294,13 @@ fn main() {
             ai_send,
             ai_set_overlay,
             ai_open_faq,
-            ai_open_url
+            ai_open_url,
+            save_clip,
+            set_replay_seconds,
+            set_clip_look,
+            open_clips,
+            get_hotkeys,
+            set_hotkeys
         ])
         .run(tauri::generate_context!())
         .expect("error while running PhoneCast");

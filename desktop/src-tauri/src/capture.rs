@@ -28,8 +28,14 @@ use std::os::windows::process::CommandExt;
 pub enum Source {
     #[default]
     Phone,
-    /// A monitor, by ddagrab output index (DXGI order on the main adapter).
-    Screen { output: usize },
+    /// A monitor, by ddagrab output index (DXGI order on the main adapter)
+    /// plus its stable hardware ID, so the choice survives replugging and
+    /// Windows updates that renumber displays.
+    Screen {
+        output: usize,
+        #[serde(default)]
+        id: String,
+    },
     /// One top-level window (game, emulator, browser…). The handle changes
     /// between runs, so the process name and title are kept to find it again.
     Window {
@@ -113,6 +119,9 @@ pub enum OverlayKind {
 #[derive(Clone, Serialize)]
 pub struct Monitor {
     pub output: usize,
+    /// Stable ID from the monitor hardware (manufacturer + model), e.g.
+    /// "MONITOR\GSM5B09"; falls back to the GDI device name.
+    pub id: String,
     pub name: String,
     /// GDI device name, `\\.\DISPLAY1`.
     pub device: String,
@@ -151,8 +160,10 @@ pub fn monitors() -> Vec<Monitor> {
                 .position(|&c| c == 0)
                 .unwrap_or(info.szDevice.len());
             let dev = String::from_utf16_lossy(&info.szDevice[..len]);
+            let id = unsafe { monitor_id(&info.szDevice) }.unwrap_or_else(|| dev.clone());
             list.push(Monitor {
                 output: 0,
+                id,
                 name: String::new(),
                 device: dev,
                 width: (r.right - r.left) as u32,
@@ -172,6 +183,15 @@ pub fn monitors() -> Vec<Monitor> {
         );
     }
     list.sort_by(|a, b| a.device.cmp(&b.device));
+    // Two identical monitors share an ID; number the second one.
+    let mut seen: Vec<String> = Vec::new();
+    for m in list.iter_mut() {
+        let n = seen.iter().filter(|s| **s == m.id).count();
+        seen.push(m.id.clone());
+        if n > 0 {
+            m.id = format!("{}#{}", m.id, n + 1);
+        }
+    }
     list.into_iter()
         .enumerate()
         .map(|(i, mut m)| {
@@ -184,6 +204,29 @@ pub fn monitors() -> Vec<Monitor> {
             m
         })
         .collect()
+}
+
+/// The monitor's hardware ID for a GDI display device ("\\.\DISPLAY1").
+///
+/// # Safety
+/// `device` must be a NUL-terminated UTF-16 string.
+#[cfg(windows)]
+unsafe fn monitor_id(device: &[u16]) -> Option<String> {
+    use windows_sys::Win32::Graphics::Gdi::{EnumDisplayDevicesW, DISPLAY_DEVICEW};
+    let mut dd: DISPLAY_DEVICEW = unsafe { std::mem::zeroed() };
+    dd.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+    if unsafe { EnumDisplayDevicesW(device.as_ptr(), 0, &mut dd, 0) } == 0 {
+        return None;
+    }
+    let len = dd
+        .DeviceID
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(dd.DeviceID.len());
+    let full = String::from_utf16_lossy(&dd.DeviceID[..len]);
+    // "MONITOR\GSM5B09\{GUID}\0001": keep the hardware part only.
+    let stable: String = full.split('\\').take(2).collect::<Vec<_>>().join("\\");
+    (!stable.is_empty()).then_some(stable)
 }
 
 #[cfg(not(windows))]
@@ -595,9 +638,12 @@ pub struct ScreenPreview {
 }
 
 impl ScreenPreview {
+    /// `epoch`: the clock frame timestamps are taken from, shared with the
+    /// audio mixer so the replay buffer can line the two up.
     pub fn start(
         ffmpeg: PathBuf,
         video: PcVideo,
+        epoch: std::time::Instant,
         on_config: Arc<dyn Fn(VideoConfig) + Send + Sync>,
         on_frame: Arc<dyn Fn(bool, i64, Vec<u8>) + Send + Sync>,
     ) -> Self {
@@ -607,7 +653,7 @@ impl ScreenPreview {
             .name("screen-preview".into())
             .spawn(move || {
                 while !st.load(Ordering::SeqCst) {
-                    if let Err(e) = Self::run(&ffmpeg, &video, &on_config, &on_frame, &st) {
+                    if let Err(e) = Self::run(&ffmpeg, &video, epoch, &on_config, &on_frame, &st) {
                         crate::diag::log("preview", format!("screen preview: {e}"));
                     }
                     if !st.load(Ordering::SeqCst) {
@@ -622,6 +668,7 @@ impl ScreenPreview {
     fn run(
         ffmpeg: &PathBuf,
         video: &PcVideo,
+        epoch: std::time::Instant,
         on_config: &Arc<dyn Fn(VideoConfig) + Send + Sync>,
         on_frame: &Arc<dyn Fn(bool, i64, Vec<u8>) + Send + Sync>,
         stop: &AtomicBool,
@@ -662,7 +709,10 @@ impl ScreenPreview {
         let mut buf = Vec::with_capacity(1 << 20);
         let mut chunk = vec![0u8; 64 * 1024];
         let mut csd: Option<Vec<u8>> = None;
-        let start = std::time::Instant::now();
+        // The raw H.264 pipe carries no timestamps and frames arrive in
+        // bursts, so put them on a steady 60 fps grid anchored to the clock
+        // (re-anchored after a pause), the way the recorder expects.
+        let mut next_pts: Option<i64> = None;
         loop {
             if stop.load(Ordering::SeqCst) {
                 break;
@@ -702,7 +752,12 @@ impl ScreenPreview {
                     });
                 }
                 if !frame.is_empty() && csd.is_some() {
-                    let pts = start.elapsed().as_micros() as i64;
+                    let now = epoch.elapsed().as_micros() as i64;
+                    let pts = match next_pts {
+                        Some(p) if (now - p).abs() < 200_000 => p,
+                        _ => now,
+                    };
+                    next_pts = Some(pts + 16_667);
                     on_frame(key, pts, frame);
                 }
             }

@@ -12,6 +12,9 @@ scrcpy + OBS for game streamers.
 - **Go live** on YouTube and Twitch at the same time, each at its best
   quality, encoded on your GPU (NVIDIA, AMD, Intel). Auto-reconnect.
 - **Record** in original quality while streaming.
+- **Instant clips**: press a hotkey in the middle of a game and the last
+  15 / 30 / 60 s are saved as an MP4, no re-encode.
+- **Hotkeys that work in-game** for clips, mic mute, record and go live.
 - **Honest health display**: fps, delay, bitrate, dropped frames, phone
   temperature, and a diagnostics log that says *where* a stall happened.
 - ~5 MB installer, ~30 MB RAM. Nothing leaves your PC except the stream.
@@ -64,6 +67,30 @@ Click **Go live**, paste your YouTube and/or Twitch stream key, pick a
 quality, **Start streaming**. The side panel shows each platform's status.
 The window shows the upload speed you need; run a speed test first.
 
+### Clips and hotkeys
+PhoneCast keeps the last 90 seconds in memory (change or turn it off in the
+**Clips** panel). While playing, press:
+
+| Keys | Does |
+|---|---|
+| Ctrl+Shift+F8 / F9 / F10 | Save the last 15 / 30 / 60 s as MP4 |
+| Ctrl+Shift+M | Mute / unmute the mic |
+| Ctrl+Shift+R | Start / stop recording |
+| Ctrl+Shift+L | Go live / end the stream |
+
+Clips land in `Videos\PhoneCast\Clips` (the **Clips** button opens it).
+By default a clip is the original phone picture, saved instantly with no
+quality loss. Choose **Clip picture → Like the stream** to get the 16:9
+picture your viewers saw (blurred background, 1440p); that takes a few
+seconds of GPU work per clip.
+The buffer is RAM: at the phone's 50 Mbps USB setting 90 s is about
+560 MB (the Clips panel shows the live figure); lower the length or the
+phone bitrate on a PC with little memory. PC-mode clips use the 720p
+preview stream.
+The keyboard button in the header rebinds any of them. The hotkeys work
+while a fullscreen game has the focus; if one is already taken by another
+app, PhoneCast tells you so you can pick another.
+
 ### AI tools (optional)
 Everything here is off until you switch it on, runs on the CPU in a separate
 program (`phonecast-ai-helper.exe`) that is killed when you switch it off,
@@ -106,6 +133,8 @@ RAM use are shown next to the switch.
 | "That window is not open any more" | Open the app again, click ↻ in **Capture** and pick it |
 | Captured window is black | Switch the game to borderless or windowed mode; minimised windows show black |
 | Webcam not available | Close other apps using the camera |
+| "… isn't connected" warning | A remembered mic, monitor or webcam is unplugged. PhoneCast waits for it rather than switching devices by itself; pick another one if you want |
+| A hotkey does nothing | Another app owns that combination (the Hotkeys sheet says which); choose different keys |
 | Stream stutters | Click **Open diagnostics**: the log names the slow stage (upload, disk, phone heat) |
 
 ## Build from source
