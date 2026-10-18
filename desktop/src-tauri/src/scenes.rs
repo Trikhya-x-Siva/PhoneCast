@@ -187,6 +187,7 @@ pub fn split_access_units(data: &[u8], hevc: bool) -> Vec<(bool, Vec<u8>)> {
 
 /// Encodes JPEG frames (30 fps, drawn by the UI) into `w`×`h` at 60 fps in
 /// the phone's codec, one keyframe at the start, and returns the frames.
+#[allow(clippy::too_many_arguments)]
 pub fn encode(
     ffmpeg: &Path,
     jpegs: &[&[u8]],
@@ -195,6 +196,7 @@ pub fn encode(
     hevc: bool,
     tag: &str,
     keyframe_at: Option<f64>,
+    clip: Option<&crate::clips::Prepared>,
 ) -> Result<Vec<Frame>, String> {
     let dir = scenes_dir().join(format!("tmp-{tag}"));
     std::fs::remove_dir_all(&dir).ok();
@@ -208,9 +210,17 @@ pub fn encode(
     // phone made FFmpeg rebuild its GPU filter graph mid-stream, which fails
     // ("Impossible to convert between the formats ... Error reinitializing
     // filters!") and dropped the stream on "Back to game".
-    let vf = format!(
-        "scale={w}:{h}:flags=lanczos:in_range=full:out_range=tv:out_color_matrix=bt709,fps=60,format=yuv420p"
-    );
+    let to_tv = "in_range=full:out_range=tv:out_color_matrix=bt709,fps=60,format=yuv420p";
+    let vf = match clip {
+        // The character clip over the drawn scene. A looping scene lasts the
+        // clip's whole loop (the drawn 4 s loop repeats under it).
+        Some(c) => format!(
+            "[0:v]scale={w}:{h}:flags=lanczos,format=gbrp[bg];             [bg][1:v]overlay=x={x}:y={y}:eof_action=pass:format=gbrp,scale={w}:{h}:{to_tv}",
+            x = c.x,
+            y = c.y
+        ),
+        None => format!("scale={w}:{h}:flags=lanczos:{to_tv}"),
+    };
     let attempts: [&[&str]; 2] = if hevc {
         [
             &[
@@ -305,18 +315,26 @@ pub fn encode(
     let mut last_err = String::new();
     for args in attempts {
         let mut cmd = Command::new(ffmpeg);
-        cmd.args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-framerate",
-            "30",
-            "-i",
-        ])
-        .arg(dir.join("%03d.jpg"))
-        .args(["-vf", &vf])
-        .args(args);
+        cmd.args(["-hide_banner", "-loglevel", "error", "-y"]);
+        if clip.is_some_and(|c| c.pingpong) {
+            cmd.args(["-loop", "1"]);
+        }
+        cmd.args(["-framerate", "30", "-i"])
+            .arg(dir.join("%03d.jpg"));
+        match clip {
+            Some(c) => {
+                cmd.args(["-framerate", &crate::clips::CLIP_FPS.to_string(), "-i"])
+                    .arg(c.dir.join("%04d.png"))
+                    .args(["-filter_complex", &vf]);
+                if c.pingpong {
+                    cmd.args(["-t", &format!("{:.4}", c.secs())]);
+                }
+            }
+            None => {
+                cmd.args(["-vf", &vf]);
+            }
+        }
+        cmd.args(args);
         if let Some(t) = keyframe_at {
             cmd.args(["-force_key_frames", &format!("0,{t:.3}")]);
         }
@@ -496,7 +514,7 @@ mod decode_tests {
             .map(|i| std::fs::read(jdir.join(format!("{i:03}.jpg"))).unwrap())
             .collect();
         let refs: Vec<&[u8]> = jpegs.iter().map(|j| j.as_slice()).collect();
-        let frames = encode(&ffmpeg, &refs, 1920, 872, false, "test", None).unwrap();
+        let frames = encode(&ffmpeg, &refs, 1920, 872, false, "test", None, None).unwrap();
         assert!(frames[0].0 && frames.len() >= 200, "{}", frames.len());
 
         let cfg = VideoConfig {

@@ -426,6 +426,10 @@
     for (const k of ASSETS) bn[k] = await loadAsset(k, s[k]).catch(() => null);
     // Already made and unchanged: no re-render at start.
     if (s._loop && s.savedKey) savedKey = s.savedKey;
+    // Scenes whose character comes from the channel's own clip (laid over
+    // by the app), so the drawn scene leaves room for it.
+    bn._clips = s._clips || [];
+    window.bannerReady = true;
     $("bnTitle").value = bn.title;
     $("bnLine").value = bn.line;
     $("bnRight").value = bn.right;

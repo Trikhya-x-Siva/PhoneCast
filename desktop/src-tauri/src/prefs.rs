@@ -30,6 +30,8 @@ pub struct Prefs {
     pub voice_app: String,
     /// 16:9 game mode: set the phone's screen to 16:9 while streaming over USB.
     pub game_16x9: bool,
+    /// Privacy cover: "Be right back" while a non-game app is on the phone.
+    pub privacy_cover: bool,
 }
 
 impl Default for Prefs {
@@ -41,6 +43,7 @@ impl Default for Prefs {
             mic: None,
             voice_app: "auto".into(),
             game_16x9: false,
+            privacy_cover: true,
         }
     }
 }

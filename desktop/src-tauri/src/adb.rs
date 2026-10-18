@@ -36,6 +36,47 @@ pub fn find_adb() -> Option<PathBuf> {
         .or_else(|| run(&PathBuf::from("adb"), &["version"]).map(|_| PathBuf::from("adb")))
 }
 
+/// Lets the phone app see which app is on screen (privacy cover), so the
+/// user need not find "Usage access" in the phone's settings.
+pub fn grant_usage_access(adb: &PathBuf, serial: &str) -> bool {
+    let ok = run(
+        adb,
+        &[
+            "-s",
+            serial,
+            "shell",
+            "appops",
+            "set",
+            "ai.phonecast",
+            "GET_USAGE_STATS",
+            "allow",
+        ],
+    )
+    .is_some_and(|o| o.trim().is_empty());
+    if ok {
+        crate::diag::log(
+            "usb",
+            format!("{serial}: usage access granted to the phone app"),
+        );
+    }
+    ok
+}
+
+/// The same for every phone on USB (after the phone app was installed).
+pub fn grant_usage_access_all() {
+    let Some(adb) = find_adb() else { return };
+    let Some(out) = run(&adb, &["devices"]) else {
+        return;
+    };
+    for serial in out
+        .lines()
+        .skip(1)
+        .filter_map(|l| l.strip_suffix("\tdevice"))
+    {
+        grant_usage_access(&adb, serial);
+    }
+}
+
 fn run(adb: &PathBuf, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new(adb);
     cmd.args(args);
@@ -53,6 +94,7 @@ pub fn spawn(port: u16, state: Arc<Mutex<AdbState>>) {
         .spawn(move || {
             let mut adb = find_adb();
             let mut reversed: HashSet<String> = HashSet::new();
+            let mut granted: HashSet<String> = HashSet::new();
             loop {
                 if adb.is_none() {
                     adb = find_adb();
@@ -76,6 +118,9 @@ pub fn spawn(port: u16, state: Arc<Mutex<AdbState>>) {
                             .is_some_and(|l| l.contains(&spec));
                         if present || run(adb, &["-s", serial, "reverse", &spec, &spec]).is_some() {
                             reversed.insert(serial.clone());
+                        }
+                        if !granted.contains(serial) && grant_usage_access(adb, serial) {
+                            granted.insert(serial.clone());
                         }
                     }
                 }

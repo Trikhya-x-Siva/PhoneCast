@@ -273,6 +273,7 @@ function render(s) {
   renderSource(s);
   renderReplay(s.replay);
   renderScene(s);
+  renderPrivacy(s);
 }
 
 
@@ -1047,6 +1048,33 @@ function renderScene(s) {
   if (on === currentScene) return;
   currentScene = on;
   for (const b of document.querySelectorAll(".scene")) b.classList.toggle("on", (b.dataset.scene || null) === on && !!on);
+}
+
+// Privacy cover: the app switches to Be right back by itself when the phone
+// leaves the game, so that scene (and the action clip back) must be ready.
+let privacyPrepTry = 0;
+$("privacyToggle").addEventListener("change", (e) => {
+  invoke("set_privacy_cover", { on: e.target.checked }).catch((err) => toast(String(err)));
+});
+function renderPrivacy(s) {
+  const p = s.privacy;
+  if (!p) return;
+  const t = $("privacyToggle");
+  if (document.activeElement !== t) t.checked = !!p.on;
+  const app = p.app;
+  let hint = "";
+  if (!p.on) hint = "Off: whatever is on the phone's screen is streamed.";
+  else if (!s.connected) hint = "Works once the phone app is streaming.";
+  else if (!app) hint = "Waiting for the phone to report its screen (needs the new phone app over USB once).";
+  else hint = `On the phone now: ${app.label || app.pkg}${app.game ? " (game)" : " (not a game: covered)"}`;
+  $("privacyHint").textContent = hint;
+  if (p.on && window.bannerReady && !applying && performance.now() - privacyPrepTry > 10000) {
+    privacyPrepTry = performance.now();
+    (async () => {
+      await prepareScene("brb");
+      await prepareScene("stinger");
+    })().catch(() => {});
+  }
 }
 
 // Scene music: played instead of the game sound while a scene is on.

@@ -13,6 +13,7 @@ object Protocol {
     const val STATS = 0x05
     const val PONG = 0x06
     const val MIC_PCM = 0x07
+    const val FOREGROUND_APP = 0x08
 
     // PC -> phone
     const val SET_BITRATE = 0x81
@@ -20,6 +21,7 @@ object Protocol {
     const val PING = 0x83
     const val STOP = 0x84
     const val SET_MIC = 0x85
+    const val SET_PRIVACY = 0x86
 
     const val FLAG_KEYFRAME = 0x01
 

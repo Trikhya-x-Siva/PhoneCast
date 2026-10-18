@@ -457,10 +457,13 @@
     const d = Math.min(H * 0.56, W * 0.3);
     const ax = W * 0.27, ay = H * 0.5 + (name === "brb" ? Math.sin(t * TAU) * H * 0.015 : 0);
     const p = name === "brb" ? s.poseShush || s.poseWave : s.poseWave || s.poseShush;
-    if (p) pose(g, p, W * 0.24, H, H * 0.92, s, t);
+    const clip = (s._clips || []).includes(name);
+    if (clip) {
+      // The app lays the character clip over this (its middle at W * 0.25).
+    } else if (p) pose(g, p, W * 0.24, H, H * 0.92, s, t);
     else avatar(g, ax, ay, d, s, t);
     // Title.
-    const tx = W * 0.27 + d * 0.75;
+    const tx = clip ? W * 0.53 : W * 0.27 + d * 0.75;
     const titleSize = Math.round(Math.min(H * 0.13, (W - tx - W * 0.05) / (sc.title.length * 0.62)));
     shinyText(g, sc.title, tx, H * 0.47,
       `italic 900 ${titleSize}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`,
@@ -576,7 +579,9 @@
     // The character dashes in from the left with speed trails.
     const poseImg = s.poseWave || s.poseShush;
     const inK = ease((sec - 0.15) / 0.55);
-    if (poseImg && sec < 3) {
+    if ((s._clips || []).includes("stinger")) {
+      // The punch clip is laid over this by the app.
+    } else if (poseImg && sec < 3) {
       const slide = (1 - inK) * -W * 0.6;
       for (let i = 3; i >= 1; i--) {
         if (inK >= 1) break;

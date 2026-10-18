@@ -5,6 +5,7 @@ mod adb;
 mod ai;
 mod audio;
 mod capture;
+mod clips;
 mod compositor;
 mod core;
 mod diag;
@@ -304,7 +305,13 @@ fn scene_ready(core: CoreState, name: String, design: String) -> bool {
 
 #[tauri::command(async)]
 fn set_scene(core: CoreState, name: Option<String>, design: String) -> Result<(), String> {
-    core.set_scene(name.as_deref(), &design)
+    core.user_set_scene(name.as_deref(), &design)
+}
+
+/// Privacy cover on/off ("Be right back" while a non-game app is on screen).
+#[tauri::command(async)]
+fn set_privacy_cover(core: CoreState, on: bool) {
+    core.set_privacy_cover(on);
 }
 
 /// Decodes the %XX escapes of `encodeURIComponent` (headers are ASCII).
@@ -349,6 +356,8 @@ fn get_banner() -> serde_json::Value {
         .unwrap_or(serde_json::Value::Null);
     if let Some(o) = v.as_object_mut() {
         o.insert("_loop".into(), live::banner_frames_dir().is_some().into());
+        // Scenes with the channel's own character clip (drawn without a pose).
+        o.insert("_clips".into(), clips::available().into());
     }
     v
 }
@@ -742,6 +751,7 @@ fn main() {
             save_clip,
             set_replay_seconds,
             set_game_mode,
+            set_privacy_cover,
             save_banner,
             get_banner_asset,
             save_banner_asset,

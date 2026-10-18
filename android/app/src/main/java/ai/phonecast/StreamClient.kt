@@ -31,6 +31,7 @@ class StreamClient(
         fun onKeyframeRequest()
         fun onStopRequest()
         fun onSetMic(on: Boolean)
+        fun onSetPrivacy(on: Boolean)
     }
 
     @Volatile var connected = false
@@ -261,6 +262,7 @@ class StreamClient(
                     }
                     Protocol.STOP -> listener.onStopRequest()
                     Protocol.SET_MIC -> listener.onSetMic(payload.isNotEmpty() && payload[0].toInt() != 0)
+                    Protocol.SET_PRIVACY -> listener.onSetPrivacy(payload.isNotEmpty() && payload[0].toInt() != 0)
                 }
             }
         } catch (_: Exception) {

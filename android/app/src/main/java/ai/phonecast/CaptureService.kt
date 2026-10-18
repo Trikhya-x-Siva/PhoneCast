@@ -46,6 +46,15 @@ class CaptureService : Service(), StreamClient.Listener {
     private var client: StreamClient? = null
     private var wifiLock: WifiManager.WifiLock? = null
 
+    // Privacy cover: with it on (the PC asks), the picture is not sent at all
+    // while an app other than a game is on screen; the PC shows "Be right
+    // back" meanwhile. Back in the game, sending restarts on a keyframe.
+    private var watch: ForegroundWatch? = null
+    @Volatile private var privacyOn = false
+    @Volatile private var onGame = true
+    @Volatile private var waitKey = false
+    @Volatile private var lastApp: ByteArray? = null
+
     // Adaptive bitrate: target is what the user/PC asked for, current is what
     // the link can carry right now.
     @Volatile private var targetBitrate = 0
@@ -155,6 +164,15 @@ class CaptureService : Service(), StreamClient.Listener {
                 AudioCapture(proj, onConfig = { c.sendAudioConfig(it) }, onPcm = { c.send(it) })
             }.onFailure { Log.e(TAG, "game audio unavailable", it) }.getOrNull()
 
+            watch = ForegroundWatch(this, worker) { pkg, label, game ->
+                val msg = JSONObject().put("pkg", pkg).put("label", label).put("game", game)
+                    .toString().toByteArray()
+                lastApp = msg
+                // Tell the PC first, then stop (or restart) the picture.
+                client?.send(Packet(Protocol.FOREGROUND_APP, 0, System.nanoTime() / 1000, msg))
+                setOnGame(game)
+            }.also { it.start() }
+
             getSystemService(DisplayManager::class.java).registerDisplayListener(displayListener, worker)
             worker.postDelayed(tick, 1000)
             status = "Waiting for PC at ${settings.connectHost}…"
@@ -237,7 +255,7 @@ class CaptureService : Service(), StreamClient.Listener {
                 return VideoEncoder(
                     settings.codec, cw, ch, settings.fps, currentBitrate, paced = pacer != null,
                     onConfig = { c.sendVideoConfig(it) },
-                    onFrame = { c.sendVideoFrame(it) },
+                    onFrame = { if (passFrame(it)) c.sendVideoFrame(it) },
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "encoder ${cw}x$ch failed", e)
@@ -308,6 +326,8 @@ class CaptureService : Service(), StreamClient.Listener {
                     .put("audio", audio != null)
                     .put("thermal", thermal)
                     .put("heatLimited", thermalLimited)
+                    .put("usageAccess", watch?.allowed ?: false)
+                    .put("privacyHiding", privacyOn && !onGame)
                 batteryInfo(stats)
                 c.send(Packet(Protocol.STATS, 0, System.nanoTime() / 1000, stats.toString().toByteArray()))
 
@@ -388,10 +408,30 @@ class CaptureService : Service(), StreamClient.Listener {
         encoder?.setBitrate(bps)
     }
 
+    /** False while the privacy cover holds the picture back. */
+    private fun passFrame(p: Packet): Boolean {
+        if (privacyOn && !onGame) return false
+        if (waitKey) {
+            if (!p.isKeyframe) return false
+            waitKey = false
+        }
+        return true
+    }
+
+    private fun setOnGame(game: Boolean) {
+        val wasHidden = privacyOn && !onGame
+        onGame = game
+        if (wasHidden && !(privacyOn && !onGame)) {
+            waitKey = true
+            encoder?.requestKeyframe(force = true)
+        }
+    }
+
     // --- StreamClient.Listener (called from network threads) ---
 
     override fun onConnected() {
         worker.post {
+            lastApp?.let { client?.send(Packet(Protocol.FOREGROUND_APP, 0, System.nanoTime() / 1000, it)) }
             encoder?.requestKeyframe(force = true)
             status = "PC connected"
             updateNotification()
@@ -439,6 +479,17 @@ class CaptureService : Service(), StreamClient.Listener {
         }
     }
 
+    override fun onSetPrivacy(on: Boolean) {
+        worker.post {
+            val wasHidden = privacyOn && !onGame
+            privacyOn = on
+            if (wasHidden && !(privacyOn && !onGame)) {
+                waitKey = true
+                encoder?.requestKeyframe(force = true)
+            }
+        }
+    }
+
     override fun onStopRequest() {
         worker.post { stopSelf() }
     }
@@ -482,6 +533,7 @@ class CaptureService : Service(), StreamClient.Listener {
                 getSystemService(DisplayManager::class.java).unregisterDisplayListener(displayListener)
             }
         }
+        watch?.stop()
         client?.close()
         audio?.stop()
         mic?.stop()

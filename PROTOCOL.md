@@ -26,6 +26,8 @@ u8 type | u8 flags | i64 ptsUs | u32 len | payload[len]
 | 0x04 | AUDIO_PCM | interleaved PCM |
 | 0x05 | STATS | UTF-8 JSON (battery, temperature, thermal status, fps, bitrate…) |
 | 0x06 | PONG | i64 pcTimeUs (echoed) · i64 phoneTimeUs |
+| 0x07 | MIC_PCM | phone mic PCM (48 kHz s16le mono) |
+| 0x08 | FOREGROUND_APP | UTF-8 JSON `{pkg, label, game}`: the app now on screen (privacy cover) |
 
 ### PC → phone
 | type | name | payload |
@@ -34,6 +36,8 @@ u8 type | u8 flags | i64 ptsUs | u32 len | payload[len]
 | 0x82 | REQUEST_KEYFRAME | — |
 | 0x83 | PING | i64 pcTimeUs |
 | 0x84 | STOP | — |
+| 0x85 | SET_MIC | u8 1 = send the phone mic |
+| 0x86 | SET_PRIVACY | u8 1 = send no picture while a non-game app is on screen |
 
 ## Wi-Fi discovery (UDP 27185)
 The phone broadcasts `PCST-DISCOVER` to 255.255.255.255:27185. Every

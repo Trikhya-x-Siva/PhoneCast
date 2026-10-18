@@ -22,6 +22,7 @@ use std::collections::VecDeque;
 use std::io::{BufReader, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -47,11 +48,13 @@ const AUDIO_PCM: u8 = 0x04;
 const STATS: u8 = 0x05;
 const PONG: u8 = 0x06;
 const MIC_PCM: u8 = 0x07;
+const FOREGROUND_APP: u8 = 0x08;
 // PC -> phone
 const SET_BITRATE: u8 = 0x81;
 const REQUEST_KEYFRAME: u8 = 0x82;
 const PING: u8 = 0x83;
 const SET_MIC: u8 = 0x85;
+const SET_PRIVACY: u8 = 0x86;
 
 const FLAG_KEYFRAME: u8 = 0x01;
 
@@ -154,6 +157,12 @@ pub struct Core {
     provisional_offset: Mutex<Option<i64>>,
     /// 16:9 game mode (phone screen size while streaming over USB).
     pub gamemode: Arc<GameMode>,
+    /// The app on the phone's screen (from the phone; privacy cover).
+    phone_app: Mutex<Option<Value>>,
+    /// "Be right back" was put up by the privacy cover (so it also ends it).
+    auto_brb: AtomicBool,
+    /// The scene design the window last used (for scenes the app switches).
+    last_design: Mutex<String>,
 }
 
 impl Core {
@@ -195,6 +204,9 @@ impl Core {
             last_phone_frame: Mutex::new(None),
             provisional_offset: Mutex::new(None),
             gamemode: Arc::new(GameMode::new()),
+            phone_app: Mutex::new(None),
+            auto_brb: AtomicBool::new(false),
+            last_design: Mutex::new(String::new()),
         });
         // A previous run may have left the phone in 16:9 (crash, power cut).
         let gm = core.gamemode.clone();
@@ -742,6 +754,10 @@ impl Core {
         // a leftover 16:9 size is still restored on disconnect and at startup.
         // The phone sends its mic only if it is the chosen mic.
         self.send_phone_mic();
+        self.send_phone_privacy();
+        *self.phone_app.lock().unwrap() = None;
+        // A freshly installed phone app needs usage access for the cover.
+        std::thread::spawn(crate::adb::grant_usage_access_all);
 
         // Processing happens on its own thread; this one only reads the socket.
         let (tx, rx) = sync_channel::<(u8, u8, i64, Vec<u8>, i64)>(4096);
@@ -907,6 +923,11 @@ impl Core {
                 self.inner.lock().unwrap().audio = Some((rate, payload[4]));
             }
             MIC_PCM => self.mixer.push_phone_mic(&payload),
+            FOREGROUND_APP => {
+                if let Ok(v) = serde_json::from_slice::<Value>(&payload) {
+                    self.on_phone_app(v);
+                }
+            }
             AUDIO_PCM => {
                 if self.is_pc_mode() {
                     return; // PC sound replaces the phone's game audio
@@ -1350,6 +1371,13 @@ impl Core {
                 self.status_json(&mut i)
             };
             status["scene"] = json!(scene_name);
+            let privacy_on = self.prefs.lock().unwrap().privacy_cover;
+            let on_screen = self.phone_app.lock().unwrap().clone();
+            status["privacy"] = json!({
+                "on": privacy_on,
+                "app": on_screen,
+                "auto": self.auto_brb.load(Ordering::SeqCst),
+            });
             app.emit("status", status).ok();
         }
     }
@@ -1609,6 +1637,62 @@ impl Core {
         p.save();
     }
 
+    /// Tells the phone whether to hold the picture back outside games.
+    fn send_phone_privacy(&self) {
+        let on = self.prefs.lock().unwrap().privacy_cover;
+        self.send_phone(SET_PRIVACY, &[on as u8]);
+    }
+
+    pub fn set_privacy_cover(&self, on: bool) {
+        {
+            let mut p = self.prefs.lock().unwrap();
+            p.privacy_cover = on;
+            p.save();
+        }
+        self.send_phone_privacy();
+        if !on && self.auto_brb.swap(false, Ordering::SeqCst) {
+            let design = self.last_design.lock().unwrap().clone();
+            self.set_scene(None, &design).ok();
+        }
+    }
+
+    /// Privacy cover: leaving the game puts up "Be right back" (the phone
+    /// also stops sending the picture); coming back plays the action clip
+    /// and returns to the game. Scenes the user picked are left alone.
+    fn on_phone_app(&self, v: Value) {
+        let game = v["game"].as_bool().unwrap_or(true);
+        let pkg = v["pkg"].as_str().unwrap_or("").to_string();
+        diag::log(
+            "privacy",
+            format!("on screen: {pkg}{}", if game { " (game)" } else { "" }),
+        );
+        *self.phone_app.lock().unwrap() = Some(v);
+        if !self.prefs.lock().unwrap().privacy_cover {
+            return;
+        }
+        let design = self.last_design.lock().unwrap().clone();
+        let scene = self.scene.lock().unwrap().name().map(str::to_string);
+        if !game {
+            if scene.is_none() {
+                match self.set_scene(Some("brb"), &design) {
+                    Ok(()) => self.auto_brb.store(true, Ordering::SeqCst),
+                    Err(e) => diag::log(
+                        "privacy",
+                        format!("Be right back not ready ({e}); the phone holds the picture back"),
+                    ),
+                }
+            }
+        } else if self.auto_brb.swap(false, Ordering::SeqCst) && scene.as_deref() == Some("brb") {
+            self.set_scene(None, &design).ok();
+        }
+    }
+
+    /// A scene the user picked: the privacy cover no longer owns it.
+    pub fn user_set_scene(&self, name: Option<&str>, design: &str) -> Result<(), String> {
+        self.auto_brb.store(false, Ordering::SeqCst);
+        self.set_scene(name, design)
+    }
+
     /// Tells the phone app whether to send its mic (only while chosen).
     fn send_phone_mic(&self) {
         self.send_phone(SET_MIC, &[self.mixer.uses_phone_mic() as u8]);
@@ -1693,7 +1777,14 @@ impl Core {
                 height: 872,
                 csd: Vec::new(),
             });
-        let key = format!("{name}-{design}-{}x{}-{}", cfg.width, cfg.height, cfg.codec);
+        // The character clip is part of the key: a new clip makes a new scene.
+        let key = format!(
+            "{name}-{design}-{}x{}-{}-{}",
+            cfg.width,
+            cfg.height,
+            cfg.codec,
+            crate::clips::stamp(name)
+        );
         Ok((key, cfg))
     }
 
@@ -1712,12 +1803,19 @@ impl Core {
         hold_at: Option<f64>,
     ) -> Result<(), String> {
         let (key, cfg) = self.scene_key(name, design)?;
+        *self.last_design.lock().unwrap() = design.to_string();
         let ffmpeg = self
             .live
             .ffmpeg()
             .ok_or("FFmpeg is not installed on this PC")?;
         let started = Instant::now();
         let hevc = cfg.codec == crate::mkv::CODEC_H265;
+        // A clip that fails to cut out falls back to the drawn character.
+        let clip = crate::clips::prepare(&ffmpeg, name, cfg.width as u32, cfg.height as u32)
+            .unwrap_or_else(|e| {
+                diag::log("scene", format!("{name}: clip not used: {e}"));
+                None
+            });
         let frames = crate::scenes::encode(
             &ffmpeg,
             jpegs,
@@ -1726,6 +1824,7 @@ impl Core {
             hevc,
             &key.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_"),
             hold_at,
+            clip.as_ref(),
         )?;
         diag::log(
             "scene",
