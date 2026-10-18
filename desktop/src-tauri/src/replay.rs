@@ -632,13 +632,14 @@ mod tests {
         assert!(secs > 7.9 && secs < 10.5, "{secs}");
         assert!(audio);
 
-        // Like the stream: YouTube's 1440p60 at 20 Mbps, blurred background.
+        // Like the stream: YouTube's 1440p60 H.264 preset, blurred background.
+        let preset = *crate::presets::Platform::Youtube.preset("yt-1440p60-h264");
         let look = ClipLook {
             encoder: enc.clone(),
             framing: crate::live::Framing::Blur,
-            w: 2560,
-            h: 1440,
-            kbps: 20_000,
+            w: preset.w,
+            h: preset.h,
+            preset,
         };
         let started = std::time::Instant::now();
         let framed = snap

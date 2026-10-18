@@ -63,9 +63,14 @@ and kept separate from game sound. Choose your mic in the Mic box. Wear
 headphones to avoid echo.
 
 ### Go live
-Click **Go live**, paste your YouTube and/or Twitch stream key, pick a
-quality, **Start streaming**. The side panel shows each platform's status.
-The window shows the upload speed you need; run a speed test first.
+Click **Go live**, add the platforms you stream to (YouTube, Twitch, Kick,
+Facebook Gaming or any RTMP/RTMPS/SRT server), paste each stream key and
+pick a quality. Every quality preset follows that platform's official
+limits, and PhoneCast checks everything before it starts: wrong settings,
+a missing key or too little upload are explained in plain words. Star the
+**Main** platform: if your upload is short, the others are lowered first.
+The first time, the **Setup check** finds your GPU encoder, installs FFmpeg
+if needed and measures your upload (the slowest moment, not the average).
 
 ### Clips and hotkeys
 PhoneCast keeps the last 90 seconds in memory (change or turn it off in the

@@ -1,0 +1,440 @@
+// Go live window (platform list, presets, live validation) and the
+// first-run setup check. Uses helpers from app.js: $, invoke, listen,
+// toast, escapeHtml.
+(() => {
+  const modal = $("liveModal");
+  const list = $("destList");
+  let settings = null; // last state from Rust (get/save_live_settings)
+  let dests = []; // working copy: [{id, platform, enabled, main, preset, url, backup, bandwidthTest, hasKey}]
+  const typedKeys = new Map(); // id -> key typed in this session (never stored in the page after closing)
+  let framing = "blur";
+  let plan = null;
+  let checkTimer;
+
+  const PLATFORM_COLOR = { youtube: "#ff3d3d", twitch: "#9146ff", kick: "#53fc18", facebook: "#1877f2", custom: "#8b6cff" };
+  const ICON = {
+    youtube: '<svg viewBox="0 0 24 24"><path d="M22 8.5a3 3 0 0 0-2.1-2.1C18 6 12 6 12 6s-6 0-7.9.4A3 3 0 0 0 2 8.5 31 31 0 0 0 2 12a31 31 0 0 0 .1 3.5 3 3 0 0 0 2 2.1C6 18 12 18 12 18s6 0 7.9-.4a3 3 0 0 0 2.1-2.1A31 31 0 0 0 22 12a31 31 0 0 0 0-3.5z"/><path d="m10 15 5-3-5-3z"/></svg>',
+    twitch: '<svg viewBox="0 0 24 24"><path d="M21 2H3v16h5v4l4-4h5l4-4z"/><path d="M11 11V7M16 11V7"/></svg>',
+    kick: '<svg viewBox="0 0 24 24"><path d="M5 3h5v6h2V6h3V3h4v6h-3v3h3v3h-3v3h3v3h-4v-3h-3v-3h-2v6H5z"/></svg>',
+    facebook: '<svg viewBox="0 0 24 24"><path d="M15 3h-2a4 4 0 0 0-4 4v3H7v4h2v7h4v-7h3l1-4h-4V7a1 1 0 0 1 1-1h2z"/></svg>',
+    custom: '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg>',
+  };
+  window.PLATFORM_ICON = ICON;
+  window.PLATFORM_COLOR = PLATFORM_COLOR;
+
+  const catalog = () => settings?.catalog || [];
+  const info = (pf) => catalog().find((c) => c.id === pf) || { presets: [], name: pf };
+  const presetOf = (d) => {
+    const c = info(d.platform);
+    return c.presets.find((p) => p.id === d.preset) || c.presets.find((p) => p.id === c.defaultPreset) || c.presets[0];
+  };
+  const mbps = (kbps) => `${(kbps / 1000).toFixed(kbps % 1000 ? 1 : 0)} Mbps`;
+
+  // ---------------- rendering ----------------
+
+  function render() {
+    list.innerHTML = "";
+    if (!dests.length) {
+      list.innerHTML = `<div class="dest-empty">No platforms yet — add one below.</div>`;
+    }
+    for (const d of dests) list.appendChild(card(d));
+    $("addDest").innerHTML = catalog()
+      .map((c) => `<button class="chip-btn" data-add="${c.id}" style="--c:${PLATFORM_COLOR[c.id]}">${ICON[c.id]}<span>${escapeHtml(c.name)}</span></button>`)
+      .join("");
+    renderPlan();
+  }
+
+  function card(d) {
+    const c = info(d.platform);
+    const el = document.createElement("div");
+    el.className = "dest" + (d.enabled ? " on" : "");
+    el.dataset.id = d.id;
+    el.style.setProperty("--c", PLATFORM_COLOR[d.platform] || "var(--accent)");
+    const p = presetOf(d);
+    const urlField = c.needsUrl || d.platform === "facebook"
+      ? `<label class="field"><span>Server URL</span><input type="text" class="url text-in" spellcheck="false" placeholder="${d.platform === "kick" ? "rtmps://….global-contribute.live-video.net:443/app" : d.platform === "custom" ? "rtmp://, rtmps:// or srt://" : escapeHtml(c.defaultUrl)}" value="${escapeHtml(d.url)}"></label>`
+      : "";
+    const extra = d.platform === "youtube"
+      ? `<label class="switch"><input type="checkbox" class="backup" ${d.backup ? "checked" : ""}><span class="track"><span class="knob"></span></span>Send to YouTube's backup server</label>`
+      : d.platform === "twitch"
+        ? `<label class="switch" title="Twitch receives the stream but nobody sees it: use it to test your connection"><input type="checkbox" class="bwtest" ${d.bandwidthTest ? "checked" : ""}><span class="track"><span class="knob"></span></span>Bandwidth test (viewers don't see it)</label>`
+        : "";
+    const keyLabel = d.platform === "custom" ? "Stream key (if the server needs one)" : "Stream key";
+    const saved = d.hasKey && !typedKeys.has(d.id);
+    el.innerHTML = `
+      <div class="dest-head">
+        <div class="dest-icon">${ICON[d.platform] || ""}</div>
+        <div class="dest-name"><b>${escapeHtml(c.name)}</b><small class="sum">${p ? escapeHtml(p.label) : ""}</small></div>
+        <button class="star${d.main ? " on" : ""}" aria-pressed="${d.main}" title="Main platform: keeps full quality if your upload is short; the others are lowered first">
+          <svg viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2-5.5-2.9-5.5 2.9 1-6.2L3 9.6l6.2-.9z"/></svg><span>Main</span></button>
+        <label class="switch big-switch" title="Stream to ${escapeHtml(c.name)}"><input type="checkbox" class="enabled" ${d.enabled ? "checked" : ""}><span class="track"><span class="knob"></span></span></label>
+        <button class="icon-btn remove" title="Remove ${escapeHtml(c.name)}"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <div class="dest-body">
+        ${urlField}
+        <label class="field"><span>${keyLabel}</span>
+          <div class="key-row"><input type="password" class="key${saved ? " saved" : ""}" autocomplete="off" spellcheck="false"
+            placeholder="${saved ? "Saved ✓ — paste a new key to replace it" : `Paste your ${escapeHtml(c.name)} stream key`}" value="${escapeHtml(typedKeys.get(d.id) || "")}">
+            <button class="icon-btn reveal" title="Show key"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+        </label>
+        <p class="where">${escapeHtml(c.keyHint || "")}</p>
+        <label class="field"><span>Quality</span><select class="quality">${c.presets
+          .map((q) => `<option value="${q.id}" ${q.id === p?.id ? "selected" : ""}>${escapeHtml(q.label)}</option>`)
+          .join("")}</select></label>
+        <p class="preset-spec">${p ? `${p.width}×${p.height} · ${p.fps} fps · ${p.codec === "hevc" ? "HEVC" : "H.264"} CBR · keyframe every ${p.gopSeconds} s · ${escapeHtml(p.audio)}` : ""}</p>
+        ${extra}
+        <details class="limits"><summary>${escapeHtml(c.name)}'s official limits</summary><p>${escapeHtml(c.limits || "")}</p></details>
+        <ul class="dest-issues"></ul>
+      </div>`;
+    const set = (k, v) => {
+      d[k] = v;
+      scheduleCheck();
+    };
+    el.querySelector(".enabled").addEventListener("change", (e) => {
+      set("enabled", e.target.checked);
+      el.classList.toggle("on", d.enabled);
+      const key = el.querySelector(".key");
+      if (d.enabled && !d.hasKey && !key.value) setTimeout(() => key.focus(), 220);
+    });
+    el.querySelector(".star").addEventListener("click", () => {
+      const was = d.main;
+      for (const x of dests) x.main = false;
+      d.main = !was;
+      for (const s of list.querySelectorAll(".star")) {
+        const on = s.closest(".dest").dataset.id === d.id && d.main;
+        s.classList.toggle("on", on);
+        s.setAttribute("aria-pressed", on);
+      }
+      scheduleCheck();
+    });
+    el.querySelector(".remove").addEventListener("click", () => {
+      dests = dests.filter((x) => x !== d);
+      typedKeys.delete(d.id);
+      el.classList.add("leaving");
+      setTimeout(render, 160);
+      scheduleCheck();
+    });
+    el.querySelector(".quality").addEventListener("change", (e) => {
+      set("preset", e.target.value);
+      const q = presetOf(d);
+      el.querySelector(".sum").textContent = q?.label || "";
+      el.querySelector(".preset-spec").textContent = q
+        ? `${q.width}×${q.height} · ${q.fps} fps · ${q.codec === "hevc" ? "HEVC" : "H.264"} CBR · keyframe every ${q.gopSeconds} s · ${q.audio}`
+        : "";
+    });
+    el.querySelector(".url")?.addEventListener("input", (e) => set("url", e.target.value.trim()));
+    el.querySelector(".backup")?.addEventListener("change", (e) => set("backup", e.target.checked));
+    el.querySelector(".bwtest")?.addEventListener("change", (e) => set("bandwidthTest", e.target.checked));
+    const key = el.querySelector(".key");
+    key.addEventListener("input", () => {
+      const v = key.value.trim();
+      if (v) typedKeys.set(d.id, v);
+      else typedKeys.delete(d.id);
+      scheduleCheck();
+    });
+    el.querySelector(".reveal").addEventListener("click", (e) => {
+      e.preventDefault();
+      key.type = key.type === "password" ? "text" : "password";
+    });
+    return el;
+  }
+
+  const LEVEL_TEXT = { error: "Fix", warning: "Heads-up", note: "Note" };
+
+  function renderPlan() {
+    const box = $("liveIssues");
+    const start = $("liveStart");
+    if (!plan) {
+      box.innerHTML = "";
+      return;
+    }
+    const global = plan.issues.filter((i) => !i.dest);
+    box.innerHTML = global
+      .map((i) => `<li class="issue ${i.level}"><b>${LEVEL_TEXT[i.level]}</b><span>${escapeHtml(i.text)}</span></li>`)
+      .join("");
+    for (const el of list.querySelectorAll(".dest")) {
+      const id = el.dataset.id;
+      const mine = plan.issues.filter((i) => i.dest === id);
+      const chosen = plan.chosen.find((c) => c.dest === id);
+      const lowered = chosen?.lowered
+        ? [`<li class="issue warning"><b>Lowered</b><span>Streams at ${escapeHtml(chosen.label)} so everything fits your upload.</span></li>`]
+        : [];
+      el.querySelector(".dest-issues").innerHTML = lowered
+        .concat(mine.map((i) => `<li class="issue ${i.level}"><b>${LEVEL_TEXT[i.level]}</b><span>${escapeHtml(i.text)}</span></li>`))
+        .join("");
+      el.classList.toggle("has-error", mine.some((i) => i.level === "error"));
+    }
+    const need = plan.totalKbps ? mbps(plan.totalKbps) : "—";
+    const up = settings?.uploadMbps;
+    $("uploadNeed").textContent = need;
+    $("uploadHave").textContent = up ? `of ${up.toFixed(1)} Mbps measured (keeps 30% spare)` : "upload not measured yet";
+    $("uploadBox").classList.toggle("over", !!(plan.budgetKbps && plan.totalKbps > plan.budgetKbps));
+    const enabled = dests.some((d) => d.enabled);
+    start.disabled = !plan.canStart || !enabled || !settings?.ffmpeg;
+    start.title = !settings?.ffmpeg
+      ? "Install FFmpeg first (Setup check)"
+      : plan.canStart ? "" : (plan.issues.find((i) => i.level === "error")?.text || "");
+  }
+
+  // ---------------- data ----------------
+
+  function collect(withKeys) {
+    return {
+      framing,
+      destinations: dests.map((d) => {
+        const o = { id: d.id, platform: d.platform, enabled: d.enabled, main: d.main, preset: d.preset, url: d.url, backup: d.backup, bandwidthTest: d.bandwidthTest };
+        if (withKeys && typedKeys.has(d.id)) o.key = typedKeys.get(d.id);
+        return o;
+      }),
+    };
+  }
+
+  function scheduleCheck() {
+    clearTimeout(checkTimer);
+    checkTimer = setTimeout(async () => {
+      try {
+        plan = await invoke("check_live_settings", { settings: collect(true) });
+        renderPlan();
+      } catch (e) {
+        console.warn(e);
+      }
+    }, 200);
+  }
+
+  function fill(s) {
+    settings = s;
+    dests = s.destinations.map((d) => ({ ...d }));
+    framing = s.framing || "blur";
+    plan = s.plan;
+    $("ffmpegMissing").classList.toggle("hidden", s.ffmpeg);
+    $("encName").textContent = s.encoder || "your GPU";
+    for (const x of $("framing").querySelectorAll("button")) x.classList.toggle("on", x.dataset.v === framing);
+    render();
+    scheduleCheck();
+  }
+
+  async function save() {
+    const s = await invoke("save_live_settings", { settings: collect(true) });
+    typedKeys.clear();
+    fill(s);
+    return s;
+  }
+
+  // ---------------- events ----------------
+
+  $("addDest").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-add]");
+    if (!b) return;
+    const pf = b.dataset.add;
+    const c = info(pf);
+    const d = {
+      id: `${pf}-${Date.now().toString(36)}`,
+      platform: pf,
+      enabled: true,
+      main: !dests.some((x) => x.main),
+      preset: c.defaultPreset,
+      url: "",
+      backup: false,
+      bandwidthTest: false,
+      hasKey: false,
+    };
+    dests.push(d);
+    render();
+    const el = list.querySelector(`[data-id="${d.id}"]`);
+    el?.scrollIntoView({ block: "nearest", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    setTimeout(() => el?.querySelector(c.needsUrl ? ".url" : ".key")?.focus(), 220);
+    scheduleCheck();
+  });
+
+  for (const b of $("framing").querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      framing = b.dataset.v;
+      for (const x of $("framing").querySelectorAll("button")) x.classList.toggle("on", x === b);
+    });
+  }
+
+  window.openModal = () => {
+    invoke("get_live_settings").then(fill);
+    modal.classList.remove("hidden");
+  };
+  function closeModal() {
+    modal.classList.add("hidden");
+    typedKeys.clear(); // never keep keys in the page
+    for (const k of list.querySelectorAll(".key")) k.value = "";
+  }
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal || e.target.closest("[data-close]")) closeModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (!modal.classList.contains("hidden")) closeModal();
+    else if (!setupModal.classList.contains("hidden")) closeSetup();
+  });
+
+  $("liveSave").onclick = async () => {
+    try {
+      await save();
+      toast("Saved");
+    } catch (e) {
+      toast(String(e));
+    }
+  };
+  $("liveStart").onclick = async () => {
+    const btn = $("liveStart");
+    btn.disabled = true;
+    try {
+      await save();
+      await invoke("start_live");
+      closeModal();
+      toast("Going live…");
+    } catch (e) {
+      toast(String(e));
+      btn.disabled = false;
+    }
+  };
+  $("liveSetup").onclick = () => openSetup();
+  $("liveBtn").onclick = async () => {
+    if (isLive) {
+      await invoke("stop_live");
+      toast("Stream ended");
+    } else {
+      window.openModal();
+    }
+  };
+
+  // ---------------- setup check (first run, re-runnable) ----------------
+
+  const setupModal = $("setupModal");
+  let upload = null;
+
+  function step(id, state, detail) {
+    const el = $(id);
+    el.dataset.state = state; // pending | busy | ok | warn | bad
+    if (detail !== undefined) el.querySelector(".detail").innerHTML = detail;
+  }
+
+  async function runProbe() {
+    step("stEnc", "busy", "Checking which encoder this PC has…");
+    step("stFf", "busy", "Looking for FFmpeg…");
+    const e = await invoke("setup_probe").catch(() => ({ ffmpeg: null }));
+    if (!e.ffmpeg) {
+      step("stEnc", "pending", "Needs FFmpeg first.");
+      step("stFf", "bad", "FFmpeg (the free streaming engine) isn't installed. PhoneCast can download the official build from gyan.dev and check it.");
+      $("ffInstall").classList.remove("hidden");
+      return false;
+    }
+    $("ffInstall").classList.add("hidden");
+    step("stFf", "ok", `Ready${e.managed ? " (installed by PhoneCast)" : ""}.`);
+    step(
+      "stEnc",
+      e.gpu ? "ok" : "warn",
+      e.gpu
+        ? `${escapeHtml(e.h264Label)}${e.hevcHardware ? " — H.264 and HEVC, so YouTube gets the sharper HEVC presets." : " — H.264 only."}`
+        : "No GPU encoder found: streams are encoded on the CPU (x264). Expect higher CPU use; 1080p or lower is safest."
+    );
+    return true;
+  }
+
+  $("ffInstall").onclick = async () => {
+    $("ffInstall").disabled = true;
+    const bar = $("stFf").querySelector(".bar");
+    bar.classList.remove("hidden");
+    await invoke("setup_install_ffmpeg");
+    const poll = setInterval(async () => {
+      const p = await invoke("setup_install_progress");
+      if (!p) return;
+      bar.firstElementChild.style.transform = `scaleX(${p.percent / 100})`;
+      step("stFf", p.failed ? "bad" : "busy", escapeHtml(p.message));
+      if (p.done || p.failed) {
+        clearInterval(poll);
+        $("ffInstall").disabled = false;
+        bar.classList.add("hidden");
+        if (p.done) {
+          setTimeout(runProbe, 400);
+          invoke("get_live_settings").then((s) => (settings = s));
+        }
+      }
+    }, 400);
+  };
+
+  $("upRun").onclick = async () => {
+    const btn = $("upRun");
+    btn.disabled = true;
+    const bar = $("stUp").querySelector(".bar");
+    bar.classList.remove("hidden");
+    bar.firstElementChild.style.transform = "scaleX(0)";
+    step("stUp", "busy", "Measuring… keep other uploads (cloud sync, game updates) paused.");
+    const off = await listen("setup-upload", (e) => {
+      bar.firstElementChild.style.transform = `scaleX(${e.payload.fraction})`;
+      step("stUp", "busy", `Measuring… ${e.payload.mbps.toFixed(1)} Mbps`);
+    });
+    try {
+      upload = await invoke("setup_upload_test");
+      step(
+        "stUp",
+        upload.minMbps >= 8 ? "ok" : "warn",
+        `<b>${upload.minMbps} Mbps</b> at the slowest moment (typical ${upload.medianMbps}, best ${upload.maxMbps}). PhoneCast plans with the slowest number and keeps 30% spare.`
+      );
+      renderRecommend();
+    } catch (e) {
+      step("stUp", "bad", escapeHtml(String(e)));
+    } finally {
+      off();
+      bar.classList.add("hidden");
+      btn.disabled = false;
+      btn.textContent = "Measure again";
+    }
+  };
+
+  function renderRecommend() {
+    if (!upload) {
+      $("recList").innerHTML = "";
+      step("stRec", "pending", "Measure your upload first.");
+      return;
+    }
+    const r = upload.recommend;
+    step("stRec", "ok", escapeHtml(r.note));
+    $("recList").innerHTML = r.platforms
+      .map((p) => `<div class="rec" style="--c:${PLATFORM_COLOR[p.platform]}"><span class="dest-icon">${ICON[p.platform]}</span><b>${escapeHtml(p.name)}</b><span>${escapeHtml(p.label)}</span></div>`)
+      .join("");
+  }
+
+  async function openSetup() {
+    setupModal.classList.remove("hidden");
+    const s = await invoke("get_live_settings");
+    settings = settings || s;
+    if (s.uploadMbps && !upload) {
+      step("stUp", "ok", `Last measured: <b>${s.uploadMbps.toFixed(1)} Mbps</b> at the slowest moment.`);
+      $("upRun").textContent = "Measure again";
+    }
+    renderRecommend();
+    runProbe();
+  }
+  function closeSetup() {
+    setupModal.classList.add("hidden");
+    invoke("save_live_settings", { settings: { setupDone: true } }).catch(() => {});
+    if (!modal.classList.contains("hidden")) invoke("get_live_settings").then(fill);
+  }
+  setupModal.addEventListener("click", (e) => {
+    if (e.target === setupModal || e.target.closest("[data-close]")) closeSetup();
+  });
+  $("setupDone").onclick = closeSetup;
+  $("setupApply").onclick = async () => {
+    if (!upload) return closeSetup();
+    // Apply each recommendation to destinations of that platform.
+    const s = await invoke("get_live_settings");
+    const pick = Object.fromEntries(upload.recommend.platforms.map((p) => [p.platform, p.preset]));
+    const destinations = s.destinations.map((d) => ({ ...d, preset: pick[d.platform] || d.preset }));
+    await invoke("save_live_settings", { settings: { destinations, setupDone: true } });
+    toast("Recommended quality applied");
+    closeSetup();
+  };
+
+  // First run: open the setup check once.
+  invoke("get_live_settings")
+    .then((s) => {
+      settings = s;
+      if (!s.setupDone) setTimeout(openSetup, 600);
+    })
+    .catch(() => {});
+})();

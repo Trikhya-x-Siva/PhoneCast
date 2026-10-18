@@ -1,14 +1,17 @@
-//! Go live: YouTube and Twitch at the same time.
+//! Go live: YouTube, Twitch, Kick, Facebook Gaming and custom RTMP/SRT
+//! servers, several at once.
 //!
 //! Each destination gets its own FFmpeg process fed with the phone stream
 //! (as live MKV on stdin). FFmpeg decodes on the GPU, fits the picture to a
 //! 16:9 canvas at a steady 60 fps, encodes with the GPU encoder (NVENC on
-//! NVIDIA) at that platform's best settings, and sends it over RTMPS.
-//! Destinations are independent: if one drops, it reconnects on its own and
-//! the other keeps going.
+//! NVIDIA) with the platform preset from `presets.rs`, and sends it through
+//! FFmpeg's fifo muxer: a network drop reconnects inside FFmpeg without
+//! restarting the encoder. Destinations are independent: if one drops, it
+//! reconnects on its own and the others keep going.
 
 use crate::capture::PcVideo;
 use crate::mkv::{MkvWriter, VideoConfig};
+use crate::presets::{self, Codec, Platform, Preset};
 use crate::sinks::{Media, Push, SinkTx};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -25,39 +28,63 @@ use std::os::windows::process::CommandExt;
 
 // ---------------- settings ----------------
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+/// One place to stream to.
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[serde(default, rename_all = "camelCase")]
 pub struct DestSettings {
+    pub id: String,
+    /// youtube | twitch | kick | facebook | custom
+    pub platform: String,
     pub enabled: bool,
-    pub quality: String,
+    /// The main platform keeps full quality when the upload is short.
+    pub main: bool,
+    pub preset: String,
+    /// Server URL; empty = the platform's default ingest.
+    pub url: String,
+    /// YouTube: send to the backup ingest server instead.
+    pub backup: bool,
+    /// Twitch: bandwidth-test mode (viewers don't see the stream).
+    pub bandwidth_test: bool,
     /// Stream key, encrypted with Windows DPAPI (hex). Never stored in plain text.
-    #[serde(default)]
+    key_enc: String,
+}
+
+/// Settings from PhoneCast 0.1 (YouTube + Twitch only), migrated on load.
+#[derive(Deserialize, Clone, Default)]
+#[serde(default)]
+struct LegacyDest {
+    enabled: bool,
+    quality: String,
     key_enc: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(default, rename_all = "camelCase")]
 pub struct LiveSettings {
-    pub youtube: DestSettings,
-    pub twitch: DestSettings,
+    pub destinations: Vec<DestSettings>,
     /// "blur" = whole picture over a blurred copy of itself (what mobile
     /// streamers use), "fit" = whole picture with black bars,
     /// "fill" = crop the sides to fill 16:9.
     pub framing: String,
+    /// Measured upload in Mbps: the minimum seen during the setup check.
+    pub upload_mbps: Option<f64>,
+    /// The first-run setup check has been completed (or skipped).
+    pub setup_done: bool,
+    #[serde(skip_serializing, alias = "youtube")]
+    legacy_youtube: Option<LegacyDest>,
+    #[serde(skip_serializing, alias = "twitch")]
+    legacy_twitch: Option<LegacyDest>,
 }
 
 impl Default for LiveSettings {
     fn default() -> Self {
         Self {
-            youtube: DestSettings {
-                enabled: false,
-                quality: "1440p60".into(),
-                key_enc: String::new(),
-            },
-            twitch: DestSettings {
-                enabled: false,
-                quality: "1080p60".into(),
-                key_enc: String::new(),
-            },
+            destinations: Vec::new(),
             framing: "blur".into(),
+            upload_mbps: None,
+            setup_done: false,
+            legacy_youtube: None,
+            legacy_twitch: None,
         }
     }
 }
@@ -71,10 +98,43 @@ fn settings_path() -> PathBuf {
 
 impl LiveSettings {
     pub fn load() -> Self {
-        std::fs::read(settings_path())
+        let mut s: Self = std::fs::read(settings_path())
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        s.migrate();
+        s
+    }
+
+    /// Turns 0.1 settings (fixed YouTube/Twitch slots) into destinations.
+    fn migrate(&mut self) {
+        let yt = self.legacy_youtube.take();
+        let tw = self.legacy_twitch.take();
+        if !self.destinations.is_empty() {
+            return;
+        }
+        for (pf, old) in [("youtube", yt), ("twitch", tw)] {
+            let Some(old) = old else { continue };
+            if !old.enabled && old.key_enc.is_empty() {
+                continue;
+            }
+            let preset = match (pf, old.quality.as_str()) {
+                ("youtube", "1080p60") => "yt-1080p60-h264",
+                ("youtube", _) => "yt-1440p60-hevc",
+                ("twitch", "936p60") => "tw-936p60",
+                ("twitch", "720p60") => "tw-720p60",
+                _ => "tw-1080p60",
+            };
+            self.destinations.push(DestSettings {
+                id: pf.into(),
+                platform: pf.into(),
+                enabled: old.enabled,
+                main: pf == "youtube",
+                preset: preset.into(),
+                key_enc: old.key_enc,
+                ..Default::default()
+            });
+        }
     }
 
     fn save(&self) -> std::io::Result<()> {
@@ -84,71 +144,118 @@ impl LiveSettings {
         }
         std::fs::write(p, serde_json::to_vec_pretty(self)?)
     }
+
+    /// Applies an edit from the UI. `encrypt` = false is a dry run for live
+    /// validation: typed keys only count as "present".
+    fn apply(&mut self, v: &Value, encrypt: bool) -> Result<(), String> {
+        if let Some(f) = v.get("framing").and_then(Value::as_str) {
+            self.framing = match Framing::parse(f) {
+                Framing::Blur => "blur",
+                Framing::Fit => "fit",
+                Framing::Fill => "fill",
+            }
+            .into();
+        }
+        if let Some(m) = v.get("uploadMbps") {
+            self.upload_mbps = m.as_f64().filter(|x| *x > 0.0);
+        }
+        if let Some(b) = v.get("setupDone").and_then(Value::as_bool) {
+            self.setup_done = b;
+        }
+        let Some(list) = v.get("destinations").and_then(Value::as_array) else {
+            return Ok(());
+        };
+        let mut out = Vec::new();
+        let mut seen_main = false;
+        for (n, o) in list.iter().enumerate() {
+            let Some(pf) = o
+                .get("platform")
+                .and_then(Value::as_str)
+                .and_then(Platform::parse)
+            else {
+                continue;
+            };
+            let mut id = o
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            if id.is_empty() || out.iter().any(|d: &DestSettings| d.id == id) {
+                id = format!(
+                    "{}-{}-{n}",
+                    pf.id(),
+                    chrono::Local::now().timestamp_millis()
+                );
+            }
+            let old = self.destinations.iter().find(|d| d.id == id);
+            let s = |k: &str| {
+                o.get(k)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            };
+            let b = |k: &str| o.get(k).and_then(Value::as_bool).unwrap_or(false);
+            let mut d = DestSettings {
+                id: id.clone(),
+                platform: pf.id().into(),
+                enabled: b("enabled"),
+                main: b("main") && !seen_main,
+                preset: pf.preset(&s("preset")).id.into(),
+                url: s("url"),
+                backup: b("backup") && pf == Platform::Youtube,
+                bandwidth_test: b("bandwidthTest") && pf == Platform::Twitch,
+                key_enc: old.map(|d| d.key_enc.clone()).unwrap_or_default(),
+            };
+            seen_main |= d.main;
+            if let Some(k) = o.get("key").and_then(Value::as_str) {
+                let k = k.trim();
+                d.key_enc = if k.is_empty() {
+                    String::new()
+                } else if encrypt {
+                    dpapi::protect(k)?
+                } else {
+                    "typed".into()
+                };
+            }
+            out.push(d);
+        }
+        self.destinations = out;
+        Ok(())
+    }
+
+    /// Enabled destinations as the validator sees them.
+    fn inputs(&self) -> Vec<presets::DestInput> {
+        self.destinations
+            .iter()
+            .filter(|d| d.enabled)
+            .filter_map(|d| {
+                let pf = Platform::parse(&d.platform)?;
+                Some(presets::DestInput {
+                    id: d.id.clone(),
+                    platform: pf,
+                    preset: d.preset.clone(),
+                    main: d.main,
+                    url: server_url(d, pf),
+                    has_key: !d.key_enc.is_empty(),
+                })
+            })
+            .collect()
+    }
 }
 
-struct Preset {
-    id: &'static str,
-    label: &'static str,
-    w: u32,
-    h: u32,
-    kbps: u32,
-    hevc: bool,
-}
-
-// YouTube: 1440p is the sweet spot for phone games. YouTube re-encodes
-// 1440p+ uploads with its higher-quality VP9 codec, so viewers at 1080p get a
-// visibly sharper picture than from a 1080p upload. 4K is not offered: a phone
-// picture is only ~1080 px tall (4K just upscales it), it needs 35+ Mbps of
-// steady upload, and YouTube rejected 4K HEVC from us in a real test.
-// The first entry is the fallback for unknown/old saved choices.
-const YOUTUBE: &[Preset] = &[
-    Preset {
-        id: "1440p60",
-        label: "1440p60 · 20 Mbps (best quality, recommended)",
-        w: 2560,
-        h: 1440,
-        kbps: 20_000,
-        hevc: false,
-    },
-    Preset {
-        id: "1080p60",
-        label: "1080p60 · 13.5 Mbps (for slower upload)",
-        w: 1920,
-        h: 1080,
-        kbps: 13_500,
-        hevc: false,
-    },
-];
-
-const TWITCH: &[Preset] = &[
-    Preset {
-        id: "1080p60",
-        label: "1080p60 · 6 Mbps (recommended)",
-        w: 1920,
-        h: 1080,
-        kbps: 6_000,
-        hevc: false,
-    },
-    Preset {
-        id: "936p60",
-        label: "936p60 · 6 Mbps (sharper on slow upload)",
-        w: 1664,
-        h: 936,
-        kbps: 6_000,
-        hevc: false,
-    },
-    Preset {
-        id: "720p60",
-        label: "720p60 · 4.5 Mbps",
-        w: 1280,
-        h: 720,
-        kbps: 4_500,
-        hevc: false,
-    },
-];
-
-fn preset(list: &'static [Preset], id: &str) -> &'static Preset {
-    list.iter().find(|p| p.id == id).unwrap_or(&list[0])
+/// The ingest server a destination sends to.
+fn server_url(d: &DestSettings, pf: Platform) -> String {
+    if d.backup {
+        if let Some(b) = pf.backup_url() {
+            return b.into();
+        }
+    }
+    if d.url.trim().is_empty() {
+        pf.default_url().into()
+    } else {
+        d.url.trim().into()
+    }
 }
 
 // ---------------- encoders ----------------
@@ -160,7 +267,8 @@ struct Encoders {
 }
 
 pub fn find_ffmpeg() -> Option<PathBuf> {
-    let mut c = Vec::new();
+    // PhoneCast's own copy (installed by the setup wizard) comes first.
+    let mut c: Vec<PathBuf> = crate::setup::managed_ffmpeg().into_iter().collect();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(d) = exe.parent() {
             c.push(d.join("ffmpeg.exe"));
@@ -232,80 +340,160 @@ fn encoder_label(e: &str) -> &'static str {
     }
 }
 
-fn encoder_args(enc: &str, kbps: u32, hevc: bool, uhd: bool) -> Vec<String> {
-    let b = format!("{kbps}k");
-    let buf = format!("{}k", kbps * 2);
+impl Encoders {
+    /// HEVC only counts when a GPU encoder can do it in real time.
+    fn hevc_hw(&self) -> bool {
+        !self.hevc.starts_with("lib")
+    }
+}
+
+/// Video encoder settings for one preset: CBR, closed GOP with IDR
+/// keyframes exactly every `gop_s` seconds, the platform's B-frame limit,
+/// profile/level, and global headers (needed so the fifo muxer can resend
+/// the codec header after a reconnect).
+fn encoder_args(enc: &str, pr: &Preset) -> Vec<String> {
+    let hevc = pr.codec == Codec::Hevc;
+    let b = format!("{}k", pr.kbps);
+    let gop = pr.gop_frames().to_string();
+    let bf = pr.max_bframes.to_string();
     let mut a: Vec<String> = vec!["-c:v".into(), enc.into()];
-    let more: &[&str] = if enc.contains("nvenc") {
-        // Highest-quality NVENC settings that still run in real time on RTX 40
-        // (p5; p4 for 4K so it keeps up alongside a second stream).
-        if uhd {
-            &[
-                "-preset",
-                "p4",
-                "-tune",
-                "hq",
-                "-rc",
-                "cbr",
-                "-spatial-aq",
-                "1",
-                "-temporal-aq",
-                "1",
-                "-rc-lookahead",
-                "20",
-                "-bf",
-                "2",
-            ]
-        } else {
-            &[
-                "-preset",
-                "p5",
-                "-tune",
-                "hq",
-                "-rc",
-                "cbr",
-                "-spatial-aq",
-                "1",
-                "-temporal-aq",
-                "1",
-                "-rc-lookahead",
-                "20",
-                "-bf",
-                "2",
-            ]
-        }
+    let more: Vec<&str> = if enc.contains("nvenc") {
+        // Highest-quality NVENC settings that still run in real time on RTX
+        // 40 (p5; p4 for 4K so it keeps up alongside a second stream).
+        // qres two-pass, B-frames as references and a short lookahead
+        // sharpen motion; no scene-cut keyframes and forced IDR keep the
+        // GOP exactly what the platform asks for.
+        vec![
+            "-preset",
+            if pr.h >= 2160 { "p4" } else { "p5" },
+            "-tune",
+            "hq",
+            "-rc",
+            "cbr",
+            "-multipass",
+            "qres",
+            "-spatial-aq",
+            "1",
+            "-temporal-aq",
+            "1",
+            "-rc-lookahead",
+            "8",
+            "-no-scenecut",
+            "1",
+            "-forced-idr",
+            "1",
+            "-bf",
+            &bf,
+            "-b_ref_mode",
+            if pr.max_bframes >= 2 {
+                "middle"
+            } else {
+                "disabled"
+            },
+        ]
     } else if enc.contains("amf") {
-        &["-usage", "transcoding", "-quality", "quality", "-rc", "cbr"]
+        vec!["-usage", "transcoding", "-quality", "quality", "-rc", "cbr"]
     } else if enc.contains("qsv") {
-        &["-preset", "medium"]
+        vec!["-preset", "medium", "-bf", &bf]
     } else {
-        &["-preset", "veryfast", "-x264-params", "nal-hrd=cbr"]
+        vec![
+            "-preset",
+            "veryfast",
+            "-x264-params",
+            "nal-hrd=cbr",
+            "-sc_threshold",
+            "0",
+            "-bf",
+            &bf,
+        ]
     };
     a.extend(more.iter().map(|s| s.to_string()));
-    if !hevc && !enc.contains("x265") {
-        a.extend(["-profile:v".into(), "high".into()]);
+    a.extend([
+        "-profile:v".into(),
+        if hevc { "main" } else { pr.profile }.into(),
+    ]);
+    if let (Some(level), false) = (pr.level, hevc) {
+        a.extend(["-level:v".into(), level.into()]);
     }
     a.extend([
         "-b:v".into(),
         b.clone(),
         "-maxrate".into(),
-        b,
+        b.clone(),
+        // One second of buffer: what OBS uses for CBR; keeps the bitrate
+        // steady instead of bursting over a tight upload.
         "-bufsize".into(),
-        buf,
-        // 2-second keyframes: what YouTube and Twitch require.
+        b,
         "-g".into(),
-        "120".into(),
+        gop.clone(),
         "-keyint_min".into(),
-        "120".into(),
+        gop,
+        "-flags:v".into(),
+        "+global_header".into(),
     ]);
     a
+}
+
+/// AAC-LC at the platform's rate and bitrate.
+fn audio_args(pr: &Preset) -> Vec<String> {
+    vec![
+        "-c:a".into(),
+        "aac".into(),
+        "-b:a".into(),
+        format!("{}k", pr.audio.kbps),
+        "-ar".into(),
+        pr.audio.rate.to_string(),
+        "-ac".into(),
+        pr.audio.channels.to_string(),
+        "-flags:a".into(),
+        "+global_header".into(),
+    ]
+}
+
+/// Network output through FFmpeg's fifo muxer: when the connection drops
+/// (or stalls for `rw_timeout`), FFmpeg reconnects every second on its own,
+/// restarts on a keyframe and drops packets meanwhile, so the encoder and
+/// the PhoneCast side never restart. Verified with FFmpeg 9.0.2 against a
+/// local RTMP server that was killed and restarted mid-stream.
+fn fifo_output_args(container: &str, url: &str) -> Vec<String> {
+    let format_opts = if container == "flv" {
+        "flvflags=no_duration_filesize:rw_timeout=6000000"
+    } else {
+        "rw_timeout=6000000"
+    };
+    [
+        "-f",
+        "fifo",
+        "-fifo_format",
+        container,
+        "-format_opts",
+        format_opts,
+        "-attempt_recovery",
+        "1",
+        "-recover_any_error",
+        "1",
+        "-max_recovery_attempts",
+        "0",
+        "-recovery_wait_time",
+        "1",
+        "-restart_with_keyframe",
+        "1",
+        "-drop_pkts_on_overflow",
+        "1",
+        "-queue_size",
+        "120",
+        url,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 // ---------------- destination status ----------------
 
 #[derive(Clone, Serialize)]
 pub struct DestStatus {
-    pub id: &'static str,
+    pub id: String,
     pub name: &'static str,
     pub state: String,
     pub fps: f64,
@@ -329,78 +517,110 @@ pub struct Dest {
 pub struct Live {
     settings: Mutex<LiveSettings>,
     dests: Mutex<Vec<Dest>>,
-    ffmpeg: Option<PathBuf>,
+    ffmpeg: Mutex<Option<PathBuf>>,
     encoders: Arc<Mutex<Option<Encoders>>>,
     started: Mutex<Option<Instant>>,
 }
 
 impl Live {
     pub fn new() -> Arc<Live> {
-        let ffmpeg = find_ffmpeg();
         let live = Arc::new(Live {
             settings: Mutex::new(LiveSettings::load()),
             dests: Mutex::new(Vec::new()),
-            ffmpeg: ffmpeg.clone(),
+            ffmpeg: Mutex::new(None),
             encoders: Arc::new(Mutex::new(None)),
             started: Mutex::new(None),
         });
-        if let Some(ff) = ffmpeg {
-            let enc = live.encoders.clone();
-            std::thread::spawn(move || *enc.lock().unwrap() = Some(probe_encoders(&ff)));
-        }
+        live.reload_ffmpeg();
         live
     }
 
-    pub fn settings_json(&self) -> Value {
-        let s = self.settings.lock().unwrap();
-        let enc = self.encoders.lock().unwrap().clone();
-        let d = |d: &DestSettings, list: &'static [Preset]| {
-            json!({
-                "enabled": d.enabled,
-                "quality": preset(list, &d.quality).id,
-                "hasKey": !d.key_enc.is_empty(),
-                "presets": list.iter().map(|p| json!({"id": p.id, "label": p.label, "kbps": p.kbps})).collect::<Vec<_>>(),
-            })
+    /// Looks for FFmpeg again (after the setup wizard installed it) and
+    /// re-probes the encoders in the background.
+    pub fn reload_ffmpeg(&self) {
+        let ffmpeg = find_ffmpeg();
+        *self.ffmpeg.lock().unwrap() = ffmpeg.clone();
+        *self.encoders.lock().unwrap() = None;
+        if let Some(ff) = ffmpeg {
+            let enc = self.encoders.clone();
+            std::thread::spawn(move || *enc.lock().unwrap() = Some(probe_encoders(&ff)));
+        }
+    }
+
+    /// Encoders on this PC, probing now if the background probe hasn't
+    /// finished (blocking: call off the UI thread).
+    pub fn encoder_info(&self) -> Value {
+        let Some(ff) = self.ffmpeg() else {
+            return json!({ "ffmpeg": null });
         };
+        let known = self.encoders.lock().unwrap().clone();
+        let enc = known.unwrap_or_else(|| {
+            let e = probe_encoders(&ff);
+            *self.encoders.lock().unwrap() = Some(e.clone());
+            e
+        });
         json!({
-            "youtube": d(&s.youtube, YOUTUBE),
-            "twitch": d(&s.twitch, TWITCH),
-            "framing": s.framing,
-            "ffmpeg": self.ffmpeg.is_some(),
-            "encoder": enc.as_ref().map(|e| encoder_label(&e.h264)),
+            "ffmpeg": ff.display().to_string(),
+            "managed": crate::setup::managed_ffmpeg().is_some_and(|m| m == ff),
+            "h264": enc.h264,
+            "h264Label": encoder_label(&enc.h264),
+            "hevc": enc.hevc,
+            "hevcHardware": enc.hevc_hw(),
+            "gpu": !enc.h264.starts_with("lib"),
         })
+    }
+
+    fn hevc(&self) -> bool {
+        self.encoders
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|e| e.hevc_hw())
+    }
+
+    pub fn settings_json(&self) -> Value {
+        let s = self.settings.lock().unwrap().clone();
+        let enc = self.encoders.lock().unwrap().clone();
+        let hevc = self.hevc();
+        json!({
+            "destinations": s.destinations.iter().map(|d| json!({
+                "id": d.id,
+                "platform": d.platform,
+                "enabled": d.enabled,
+                "main": d.main,
+                "preset": d.preset,
+                "url": d.url,
+                "backup": d.backup,
+                "bandwidthTest": d.bandwidth_test,
+                "hasKey": !d.key_enc.is_empty(),
+            })).collect::<Vec<_>>(),
+            "catalog": presets::catalog_json(hevc),
+            "framing": s.framing,
+            "ffmpeg": self.ffmpeg().is_some(),
+            "encoder": enc.as_ref().map(|e| encoder_label(&e.h264)),
+            "hevc": hevc,
+            "encodersKnown": enc.is_some(),
+            "uploadMbps": s.upload_mbps,
+            "setupDone": s.setup_done,
+            "plan": presets::plan(&s.inputs(), s.upload_mbps, hevc),
+        })
+    }
+
+    /// Validates an unsaved edit (live messages in the Go live window).
+    pub fn check_settings(&self, v: &Value) -> Result<Value, String> {
+        let mut s = self.settings.lock().unwrap().clone();
+        s.apply(v, false)?;
+        Ok(
+            serde_json::to_value(presets::plan(&s.inputs(), s.upload_mbps, self.hevc()))
+                .unwrap_or_default(),
+        )
     }
 
     /// Updates settings. Keys are only replaced when a new one is typed;
     /// an empty string clears it.
     pub fn update_settings(&self, v: &Value) -> Result<(), String> {
-        let mut guard = self.settings.lock().unwrap();
-        let s = &mut *guard;
-        for (name, d) in [("youtube", &mut s.youtube), ("twitch", &mut s.twitch)] {
-            let Some(o) = v.get(name) else { continue };
-            if let Some(e) = o.get("enabled").and_then(Value::as_bool) {
-                d.enabled = e;
-            }
-            if let Some(q) = o.get("quality").and_then(Value::as_str) {
-                d.quality = q.into();
-            }
-            if let Some(k) = o.get("key").and_then(Value::as_str) {
-                let k = k.trim();
-                d.key_enc = if k.is_empty() {
-                    String::new()
-                } else {
-                    dpapi::protect(k)?
-                };
-            }
-        }
-        if let Some(f) = v.get("framing").and_then(Value::as_str) {
-            s.framing = match Framing::parse(f) {
-                Framing::Blur => "blur",
-                Framing::Fit => "fit",
-                Framing::Fill => "fill",
-            }
-            .into();
-        }
+        let mut s = self.settings.lock().unwrap();
+        s.apply(v, true)?;
         s.save().map_err(|e| e.to_string())
     }
 
@@ -409,31 +629,48 @@ impl Live {
     }
 
     pub fn ffmpeg(&self) -> Option<PathBuf> {
-        self.ffmpeg.clone()
+        self.ffmpeg.lock().unwrap().clone()
     }
 
-    /// How a clip saved "like the stream" looks: the stream's framing at the
-    /// YouTube quality (1440p60 by default), on the best encoder.
+    /// How a clip saved "like the stream" looks: the stream's framing and the
+    /// MAIN platform's preset (YouTube's default when none is set up), on the
+    /// best encoder for that preset's codec.
     pub fn clip_look(&self) -> ClipLook {
         let s = self.settings.lock().unwrap().clone();
-        let p = preset(YOUTUBE, &s.youtube.quality);
-        let encoder = match (self.encoders.lock().unwrap().clone(), &self.ffmpeg) {
-            (Some(e), _) => e.h264,
-            (None, Some(ff)) => probe_encoders(ff).h264,
-            (None, None) => "libx264".into(),
+        let enc = match (self.encoders.lock().unwrap().clone(), self.ffmpeg()) {
+            (Some(e), _) => Some(e),
+            (None, Some(ff)) => Some(probe_encoders(&ff)),
+            (None, None) => None,
+        };
+        let hevc_ok = enc.as_ref().is_some_and(|e| {
+            e.hevc.contains("nvenc") || e.hevc.contains("amf") || e.hevc.contains("qsv")
+        });
+        let main = s
+            .destinations
+            .iter()
+            .find(|d| d.enabled && d.main)
+            .or_else(|| s.destinations.iter().find(|d| d.enabled));
+        let preset = match main.and_then(|d| Platform::parse(&d.platform).map(|p| (p, d))) {
+            Some((p, d)) => *p.preset(&d.preset),
+            None => *Platform::Youtube.default_preset(hevc_ok),
+        };
+        let encoder = match (enc, preset.codec) {
+            (Some(e), Codec::Hevc) => e.hevc,
+            (Some(e), Codec::H264) => e.h264,
+            (None, _) => "libx264".into(),
         };
         ClipLook {
             encoder,
             framing: Framing::parse(&s.framing),
-            w: p.w,
-            h: p.h,
-            kbps: p.kbps,
+            w: preset.w,
+            h: preset.h,
+            preset,
         }
     }
 
     /// Encoder for the PC-mode recorder (file, visually lossless).
     pub fn encoders_for_file(&self) -> Option<(String, PathBuf)> {
-        let ff = self.ffmpeg.clone()?;
+        let ff = self.ffmpeg()?;
         let enc = self
             .encoders
             .lock()
@@ -454,10 +691,7 @@ impl Live {
         if self.is_live() {
             return Err("Already live".into());
         }
-        let ffmpeg = self
-            .ffmpeg
-            .clone()
-            .ok_or("FFmpeg is not installed on this PC")?;
+        let ffmpeg = self.ffmpeg().ok_or("FFmpeg is not installed on this PC")?;
         let config = match (&pc, config) {
             (Some(p), _) => VideoConfig {
                 codec: crate::mkv::CODEC_H264,
@@ -476,51 +710,69 @@ impl Live {
             .unwrap_or_else(|| probe_encoders(&ffmpeg));
         let s = self.settings.lock().unwrap().clone();
 
-        let mut plans = Vec::new();
-        for (id, name, d, list, url) in [
-            (
-                "youtube",
-                "YouTube",
-                &s.youtube,
-                YOUTUBE,
-                "rtmps://a.rtmps.youtube.com:443/live2/",
-            ),
-            (
-                "twitch",
-                "Twitch",
-                &s.twitch,
-                TWITCH,
-                "rtmps://live.twitch.tv:443/app/",
-            ),
-        ] {
-            if !d.enabled {
-                continue;
-            }
-            if d.key_enc.is_empty() {
-                return Err(format!("Add your {name} stream key first"));
-            }
-            let key = dpapi::unprotect(&d.key_enc)?;
-            plans.push((id, name, preset(list, &d.quality), format!("{url}{key}")));
+        // Pre-flight: platform limits + upload budget. Blocks on errors.
+        let plan = presets::plan(&s.inputs(), s.upload_mbps, enc.hevc_hw());
+        if !plan.can_start {
+            let first = plan
+                .issues
+                .iter()
+                .find(|i| i.level == presets::Level::Error)
+                .map(|i| i.text.clone())
+                .unwrap_or_else(|| "Check the Go live settings".into());
+            return Err(first);
         }
-        if plans.is_empty() {
-            return Err("Turn on YouTube or Twitch first".into());
+        let mut plans = Vec::new();
+        for c in &plan.chosen {
+            let Some(d) = s.destinations.iter().find(|d| d.id == c.dest) else {
+                continue;
+            };
+            let Some(pf) = Platform::parse(&d.platform) else {
+                continue;
+            };
+            let key = if d.key_enc.is_empty() {
+                String::new()
+            } else {
+                dpapi::unprotect(&d.key_enc)?
+            };
+            let server = server_url(d, pf);
+            let url = presets::compose_url(pf, &server, &key, d.bandwidth_test);
+            let container = if server.to_ascii_lowercase().starts_with("srt://") {
+                "mpegts"
+            } else {
+                "flv"
+            };
+            crate::diag::log(
+                "live",
+                format!(
+                    "{}: preset {}{} → {}",
+                    pf.name(),
+                    c.preset,
+                    if c.lowered {
+                        " (lowered for upload)"
+                    } else {
+                        ""
+                    },
+                    server
+                ),
+            );
+            plans.push((d.id.clone(), pf, *pf.preset(&c.preset), url, container));
         }
 
         let mut dests = self.dests.lock().unwrap();
-        for (id, name, p, url) in plans {
+        for (id, pf, p, url, container) in plans {
             let status = Arc::new(Mutex::new(DestStatus {
-                id,
-                name,
+                id: id.clone(),
+                name: pf.name(),
                 state: "connecting".into(),
                 fps: 0.0,
-                kbps: 0.0,
+                kbps: p.kbps as f64,
                 dropped: 0,
                 speed: 0.0,
                 error: None,
                 since: None,
                 seconds: 0,
                 reconnects: 0,
-                quality: p.id.into(),
+                quality: p.label.split(" · ").next().unwrap_or(p.id).into(),
             }));
             let stop = Arc::new(AtomicBool::new(false));
             // ~15 s of buffer (video + 10 ms audio packets): rides out upload and
@@ -529,7 +781,7 @@ impl Live {
             let job = Job {
                 ffmpeg: ffmpeg.clone(),
                 url,
-                encoder: if p.hevc {
+                encoder: if p.codec == Codec::Hevc {
                     enc.hevc.clone()
                 } else {
                     enc.h264.clone()
@@ -537,11 +789,13 @@ impl Live {
                 w: p.w,
                 h: p.h,
                 kbps: p.kbps,
-                hevc: p.hevc,
+                hevc: p.codec == Codec::Hevc,
                 framing: Framing::parse(&s.framing),
                 // Composited sources get one frame pipe per FFmpeg process.
                 pc: pc.as_ref().map(|p| Arc::new(p.for_job())),
                 file: false,
+                preset: Some(p),
+                container,
             };
             let (st, sp, rk, cfg) = (
                 status.clone(),
@@ -629,7 +883,7 @@ pub struct ClipLook {
     pub framing: Framing,
     pub w: u32,
     pub h: u32,
-    pub kbps: u32,
+    pub preset: Preset,
 }
 
 impl ClipLook {
@@ -651,12 +905,7 @@ impl ClipLook {
             "-map".into(),
             "0:a:0?".into(),
         ];
-        a.extend(encoder_args(
-            &self.encoder,
-            self.kbps,
-            false,
-            self.w >= 3840,
-        ));
+        a.extend(encoder_args(&self.encoder, &self.preset));
         a
     }
 }
@@ -683,6 +932,11 @@ pub struct Job {
     pub pc: Option<Arc<PcVideo>>,
     /// Record to an MKV file (visually lossless) instead of streaming.
     pub file: bool,
+    /// Platform preset (codec, GOP, B-frames, profile, audio). None = a
+    /// generic H.264 preset built from `w`/`h`/`kbps`.
+    pub preset: Option<Preset>,
+    /// Network container: "flv" (RTMP/RTMPS) or "mpegts" (SRT).
+    pub container: &'static str,
 }
 
 /// Runs a job on its own thread fed by the returned sender. Used by Go live
@@ -694,7 +948,7 @@ pub fn spawn_job(
     name: &'static str,
 ) -> Dest {
     let status = Arc::new(Mutex::new(DestStatus {
-        id: name,
+        id: name.into(),
         name,
         state: "connecting".into(),
         fps: 0.0,
@@ -718,6 +972,28 @@ pub fn spawn_job(
 }
 
 impl Job {
+    /// The preset this job encodes with.
+    fn spec(&self) -> Preset {
+        self.preset.unwrap_or(Preset {
+            id: "custom",
+            label: "Custom",
+            codec: if self.hevc { Codec::Hevc } else { Codec::H264 },
+            w: self.w,
+            h: self.h,
+            fps: 60,
+            kbps: self.kbps,
+            gop_s: 2,
+            max_bframes: 2,
+            profile: "high",
+            level: None,
+            audio: presets::Audio {
+                rate: 48_000,
+                kbps: 160,
+                channels: 2,
+            },
+        })
+    }
+
     fn args(&self) -> Vec<String> {
         if let Some(pc) = &self.pc {
             return self.pc_args(pc);
@@ -729,7 +1005,7 @@ impl Job {
             "-hide_banner",
             "-y",
             "-loglevel",
-            "error",
+            "level+info",
             "-nostats",
             "-progress",
             "pipe:2",
@@ -766,7 +1042,7 @@ impl Job {
             "-map".into(),
             "0:a:0".into(),
         ]);
-        a.extend(encoder_args(&self.encoder, self.kbps, self.hevc, w >= 3840));
+        a.extend(encoder_args(&self.encoder, &self.spec()));
         a.extend(self.output_args());
         a
     }
@@ -778,7 +1054,7 @@ impl Job {
             "-hide_banner",
             "-y",
             "-loglevel",
-            "error",
+            "level+info",
             "-nostats",
             "-progress",
             "pipe:2",
@@ -820,46 +1096,23 @@ impl Job {
                 );
             }
         } else {
-            a.extend(encoder_args(
-                &self.encoder,
-                self.kbps,
-                self.hevc,
-                self.w >= 3840,
-            ));
+            a.extend(encoder_args(&self.encoder, &self.spec()));
         }
         a.extend(self.output_args());
         a
     }
 
     fn output_args(&self) -> Vec<String> {
-        let mut a: Vec<String> = Vec::new();
         if self.file {
-            a.extend(
-                ["-c:a", "pcm_s16le", "-f", "matroska"]
-                    .iter()
-                    .map(|s| s.to_string()),
-            );
-        } else {
-            a.extend(
-                [
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    "160k",
-                    "-ar",
-                    "48000",
-                    "-ac",
-                    "2",
-                    "-f",
-                    "flv",
-                    "-flvflags",
-                    "no_duration_filesize",
-                ]
+            let mut a: Vec<String> = ["-c:a", "pcm_s16le", "-f", "matroska"]
                 .iter()
-                .map(|s| s.to_string()),
-            );
+                .map(|s| s.to_string())
+                .collect();
+            a.push(self.url.clone());
+            return a;
         }
-        a.push(self.url.clone());
+        let mut a = audio_args(&self.spec());
+        a.extend(fifo_output_args(self.container, &self.url));
         a
     }
 
@@ -913,7 +1166,7 @@ impl Job {
                     "reconnecting".into()
                 };
             });
-            watch_progress(child.stderr.take().unwrap(), status.clone());
+            watch_progress(child.stderr.take().unwrap(), status.clone(), !self.file);
             let stdin = BufWriter::with_capacity(1 << 20, child.stdin.take().unwrap());
             let mut writer = if self.pc.is_some() {
                 Some(Feed::Pcm(stdin))
@@ -1045,40 +1298,136 @@ fn finish(child: &mut Child, w: Option<Feed>, graceful: bool) {
     child.wait().ok();
 }
 
-/// Parses FFmpeg's `-progress` output into live stats; other lines are errors.
-fn watch_progress(stderr: std::process::ChildStderr, status: Arc<Mutex<DestStatus>>) {
+/// Parses FFmpeg's output: `-progress` key=value lines become live stats,
+/// `[error]` lines become the shown error, and the fifo muxer's recovery
+/// messages drive the connecting → live → reconnecting state.
+///
+/// With the fifo muxer FFmpeg keeps encoding while the network is down, so
+/// frames alone don't prove the stream is on air: a network job counts as
+/// live after 3 s of frames without a connection error, or as soon as the
+/// fifo reports "Recovery successful".
+fn watch_progress(
+    stderr: std::process::ChildStderr,
+    status: Arc<Mutex<DestStatus>>,
+    network: bool,
+) {
     std::thread::spawn(move || {
         let mut last_frame = 0u64;
+        let mut first_frame: Option<Instant> = None;
+        let mut last_error: Option<Instant> = None;
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             let line = line.trim();
-            let Some((k, v)) = line.split_once('=') else {
-                if !line.is_empty() {
+            match classify(line) {
+                Line::Progress(k, v) => {
                     let mut s = status.lock().unwrap();
-                    crate::diag::log("live", format!("{}: ffmpeg: {line}", s.name));
-                    s.error = Some(friendly_error(line));
-                }
-                continue;
-            };
-            let mut s = status.lock().unwrap();
-            match k {
-                "frame" => {
-                    let f: u64 = v.parse().unwrap_or(0);
-                    if f > last_frame && s.state != "live" {
-                        s.state = "live".into();
-                        s.error = None;
-                        s.since.get_or_insert_with(Instant::now);
-                        crate::diag::log("live", format!("{}: on air", s.name));
+                    match k {
+                        "frame" => {
+                            let f: u64 = v.parse().unwrap_or(0);
+                            if f > last_frame {
+                                let first = *first_frame.get_or_insert_with(Instant::now);
+                                let settled = !network
+                                    || (first.elapsed() >= Duration::from_secs(3)
+                                        && last_error.is_none());
+                                if s.state == "connecting" && settled {
+                                    go_live(&mut s);
+                                }
+                            }
+                            last_frame = f;
+                        }
+                        "fps" => s.fps = v.parse().unwrap_or(0.0),
+                        "bitrate" => {
+                            if let Ok(k) = v.trim_end_matches("kbits/s").trim().parse() {
+                                s.kbps = k;
+                            }
+                        }
+                        "drop_frames" => s.dropped = v.parse().unwrap_or(0),
+                        "speed" => s.speed = v.trim_end_matches('x').trim().parse().unwrap_or(0.0),
+                        _ => {}
                     }
-                    last_frame = f;
                 }
-                "fps" => s.fps = v.parse().unwrap_or(0.0),
-                "bitrate" => s.kbps = v.trim_end_matches("kbits/s").trim().parse().unwrap_or(0.0),
-                "drop_frames" => s.dropped = v.parse().unwrap_or(0),
-                "speed" => s.speed = v.trim_end_matches('x').trim().parse().unwrap_or(0.0),
-                _ => {}
+                Line::Recovered => {
+                    let mut s = status.lock().unwrap();
+                    crate::diag::log("live", format!("{}: reconnected", s.name));
+                    go_live(&mut s);
+                    s.reconnects += 1;
+                    last_error = None;
+                }
+                Line::Error(msg) => {
+                    let mut s = status.lock().unwrap();
+                    crate::diag::log("live", format!("{}: ffmpeg: {msg}", s.name));
+                    s.error = Some(friendly_error(msg));
+                    last_error = Some(Instant::now());
+                    if network && is_connection_error(msg) && s.state == "live" {
+                        s.state = "reconnecting".into();
+                        s.since = None;
+                    }
+                }
+                Line::Other => {}
             }
         }
     });
+}
+
+fn go_live(s: &mut DestStatus) {
+    if s.state != "live" {
+        s.state = "live".into();
+        s.error = None;
+        s.since.get_or_insert_with(Instant::now);
+        crate::diag::log("live", format!("{}: on air", s.name));
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Line<'a> {
+    Progress(&'a str, &'a str),
+    Recovered,
+    Error(&'a str),
+    Other,
+}
+
+/// Sorts one stderr line (FFmpeg runs with `-loglevel level+info`).
+fn classify(line: &str) -> Line<'_> {
+    if line.is_empty() {
+        return Line::Other;
+    }
+    for tag in ["[error] ", "[fatal] ", "[panic] "] {
+        if let Some(i) = line.find(tag) {
+            return Line::Error(line[i + tag.len()..].trim());
+        }
+    }
+    if line.contains("Recovery successful") {
+        return Line::Recovered;
+    }
+    if ["[info]", "[warning]", "[verbose]", "[debug]"]
+        .iter()
+        .any(|t| line.contains(t))
+    {
+        return Line::Other;
+    }
+    match line.split_once('=') {
+        Some((k, v)) if !k.contains(' ') => Line::Progress(k, v.trim()),
+        // Untagged text: treat as an error message (older behaviour).
+        _ => Line::Error(line),
+    }
+}
+
+/// Errors that mean the connection to the platform is down.
+fn is_connection_error(msg: &str) -> bool {
+    let l = msg.to_lowercase();
+    [
+        "error opening",
+        "error writing",
+        "error number -138",
+        "error number -10053",
+        "error number -10054",
+        "i/o error",
+        "connection",
+        "handshake",
+        "broken pipe",
+        "timed out",
+    ]
+    .iter()
+    .any(|k| l.contains(k))
 }
 
 /// FFmpeg hwaccel flags and a filter graph turning the phone picture into a
@@ -1088,6 +1437,11 @@ fn watch_progress(stderr: std::process::ChildStderr, status: Arc<Mutex<DestStatu
 /// background is made from a tiny 384×216 copy: download, blur and upload
 /// of a frame that small costs well under 1 ms. Measured on an RTX 4050 with a
 /// real 2376×1080 phone recording: 1440p blur at 2.2× real time.
+///
+/// `overlay_cuda` hands NVENC frames padded to a multiple of 16 lines, so
+/// 1080p went out as 1920×1088 (and 720p as 736): platforms reject or
+/// rescale that. A final `scale_cuda=format=yuv420p` gives exact-size
+/// frames (checked by the `gpu_framing_sizes` test).
 fn video_filter(
     nvidia: bool,
     framing: Framing,
@@ -1109,7 +1463,8 @@ fn video_filter(
                      [b]scale_cuda=w=384:h=216:force_original_aspect_ratio=increase:force_divisible_by=2:format=nv12,\
                      hwdownload,format=nv12,format=yuv420p,crop=384:216,{soften},format=nv12,hwupload_cuda,\
                      scale_cuda=w={w}:h={h}:interp_algo=bilinear:format=nv12[bg];\
-                     [bg][fg]overlay_cuda=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2,fps=60[v]"
+                     [bg][fg]overlay_cuda=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2,\
+                     scale_cuda=format=yuv420p,fps=60[v]"
                 ),
             ),
             Framing::Fit => (
@@ -1153,8 +1508,12 @@ fn friendly_error(line: &str) -> String {
     } else if l.contains("i/o error")
         || l.contains("connection refused")
         || l.contains("error number -10053")
+        || l.contains("error number -10054")
+        || l.contains("error number -138")
+        || l.contains("handshake")
+        || l.contains("cannot open connection")
     {
-        "Connection lost — check your internet".into()
+        "Connection lost — reconnecting by itself. Check your internet if it lasts.".into()
     } else if l.contains("401")
         || l.contains("403")
         || l.contains("unauthorized")
@@ -1171,6 +1530,289 @@ fn friendly_error(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stderr_lines_are_classified() {
+        assert_eq!(classify("frame=120"), Line::Progress("frame", "120"));
+        assert_eq!(classify("bitrate=N/A"), Line::Progress("bitrate", "N/A"));
+        assert_eq!(
+            classify("[fifo @ 000001] [info] Recovery successful"),
+            Line::Recovered
+        );
+        assert_eq!(
+            classify("[fifo @ 0001] [error] Error opening rtmp://x: Error number -138 occurred"),
+            Line::Error("Error opening rtmp://x: Error number -138 occurred")
+        );
+        assert_eq!(classify("[info]   Stream #0:0: Video: h264"), Line::Other);
+        assert_eq!(
+            classify("[fifo @ 01] [warning] FIFO queue full"),
+            Line::Other
+        );
+        assert_eq!(
+            classify("[fifo @ 01] [info] Recovery failed: x"),
+            Line::Other
+        );
+        assert_eq!(
+            classify("Some untagged failure"),
+            Line::Error("Some untagged failure")
+        );
+        assert!(is_connection_error(
+            "Error opening rtmp://x: Error number -138 occurred"
+        ));
+        assert!(is_connection_error("Cannot read RTMP handshake response"));
+        assert!(!is_connection_error("Unknown encoder 'h264_nvenc'"));
+        assert!(friendly_error("Error number -138 occurred").contains("reconnecting"));
+    }
+
+    #[test]
+    fn encoder_args_follow_the_preset() {
+        let yt = Platform::Youtube.preset("yt-1440p60-hevc");
+        let a = encoder_args("hevc_nvenc", yt).join(" ");
+        for want in [
+            "-rc cbr",
+            "-multipass qres",
+            "-b_ref_mode middle",
+            "-no-scenecut 1",
+            "-forced-idr 1",
+            "-rc-lookahead 8",
+            "-bf 2",
+            "-profile:v main",
+            "-b:v 24000k",
+            "-maxrate 24000k",
+            "-g 120",
+            "-keyint_min 120",
+            "-flags:v +global_header",
+        ] {
+            assert!(a.contains(want), "missing {want} in {a}");
+        }
+        let fb = Platform::Facebook.preset("fb-1080p60");
+        let a = encoder_args("h264_nvenc", fb).join(" ");
+        assert!(a.contains("-profile:v high") && a.contains("-level:v 4.2"));
+        let kick = Platform::Kick.preset("kick-1080p60");
+        assert!(encoder_args("h264_nvenc", kick)
+            .join(" ")
+            .contains("-profile:v main"));
+        let au = audio_args(yt).join(" ");
+        assert!(au.contains("-b:a 128k") && au.contains("-ar 44100") && au.contains("-ac 2"));
+        let out = fifo_output_args("flv", "rtmps://x/app/key").join(" ");
+        for want in [
+            "-f fifo",
+            "-fifo_format flv",
+            "flvflags=no_duration_filesize:rw_timeout=6000000",
+            "-attempt_recovery 1",
+            "-recover_any_error 1",
+            "-max_recovery_attempts 0",
+            "-restart_with_keyframe 1",
+            "-drop_pkts_on_overflow 1",
+            "-queue_size 120",
+        ] {
+            assert!(out.contains(want), "missing {want}");
+        }
+        assert!(out.ends_with("rtmps://x/app/key"));
+    }
+
+    #[test]
+    fn legacy_settings_migrate() {
+        let old = r#"{"youtube":{"enabled":true,"quality":"1440p60","key_enc":"abcd"},
+                      "twitch":{"enabled":false,"quality":"720p60","key_enc":"ef"},
+                      "framing":"fit"}"#;
+        let mut s: LiveSettings = serde_json::from_str(old).unwrap();
+        s.migrate();
+        assert_eq!(s.destinations.len(), 2);
+        assert_eq!(s.destinations[0].preset, "yt-1440p60-hevc");
+        assert!(s.destinations[0].main && s.destinations[0].enabled);
+        assert_eq!(s.destinations[1].preset, "tw-720p60");
+        assert!(!s.destinations[1].enabled);
+        assert_eq!(s.framing, "fit");
+        let saved = serde_json::to_string(&s).unwrap();
+        assert!(!saved.contains("\"youtube\":{") && saved.contains("destinations"));
+    }
+
+    #[test]
+    fn ui_edits_apply_without_losing_keys() {
+        let mut s = LiveSettings::default();
+        s.destinations.push(DestSettings {
+            id: "yt".into(),
+            platform: "youtube".into(),
+            key_enc: "secret".into(),
+            ..Default::default()
+        });
+        let edit = json!({ "destinations": [
+            { "id": "yt", "platform": "youtube", "enabled": true, "main": true, "preset": "yt-1080p60-h264" },
+            { "platform": "kick", "enabled": true, "main": true, "url": "rtmps://k/app", "key": "kk" },
+            { "platform": "nope" }
+        ]});
+        s.apply(&edit, false).unwrap();
+        assert_eq!(s.destinations.len(), 2);
+        assert_eq!(s.destinations[0].key_enc, "secret");
+        assert!(s.destinations[0].main);
+        assert!(!s.destinations[1].main, "only one main");
+        assert!(!s.destinations[1].id.is_empty());
+        assert_eq!(s.destinations[1].preset, "kick-1080p60");
+        let inputs = s.inputs();
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].url, "rtmps://a.rtmps.youtube.com:443/live2");
+        assert!(inputs[1].has_key);
+    }
+
+    /// Every platform preset through the real argument builder (encoder +
+    /// audio + fifo output) into a local file, checked with ffprobe:
+    /// codec, size, fps, keyframe interval, B-frames, profile/level, audio.
+    /// `cargo test preset_outputs -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn preset_outputs() {
+        let ffmpeg = find_ffmpeg().expect("ffmpeg");
+        let ffprobe = ffmpeg.with_file_name("ffprobe.exe");
+        let enc = probe_encoders(&ffmpeg);
+        println!("encoders: {} / {}", enc.h264, enc.hevc);
+        let dir = std::env::temp_dir().join("phonecast-preset-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let probe = |file: &std::path::Path, args: &[&str]| -> String {
+            let out = Command::new(&ffprobe)
+                .args(["-v", "error"])
+                .args(args)
+                .arg(file)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let field = |text: &str, key: &str| -> String {
+            text.lines()
+                .find_map(|l| l.strip_prefix(&format!("{key}=")))
+                .unwrap_or("")
+                .to_string()
+        };
+        let mut checked = 0;
+        for pf in presets::PLATFORMS {
+            for pr in pf.presets() {
+                if pr.codec == Codec::Hevc && !enc.hevc_hw() {
+                    println!("skip {} (no HEVC encoder)", pr.id);
+                    continue;
+                }
+                let file = dir.join(format!("{}.flv", pr.id));
+                std::fs::remove_file(&file).ok();
+                let (_, filter) = video_filter(false, Framing::Fit, pr.w, pr.h);
+                let mut a: Vec<String> = [
+                    "-hide_banner",
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=s=2376x1080:r=60",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=f=440:r=48000",
+                    "-t",
+                    "6.5",
+                ]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+                a.extend([
+                    "-filter_complex".into(),
+                    filter,
+                    "-map".into(),
+                    "[v]".into(),
+                    "-map".into(),
+                    "1:a".into(),
+                ]);
+                let encoder = if pr.codec == Codec::Hevc {
+                    &enc.hevc
+                } else {
+                    &enc.h264
+                };
+                a.extend(encoder_args(encoder, pr));
+                a.extend(audio_args(pr));
+                a.extend(fifo_output_args("flv", &file.display().to_string()));
+                let st = Command::new(&ffmpeg).args(&a).status().unwrap();
+                assert!(st.success(), "{}: ffmpeg failed: {}", pr.id, a.join(" "));
+                let v = probe(
+                    &file,
+                    &[
+                        "-select_streams",
+                        "v",
+                        "-show_entries",
+                        "stream=codec_name,width,height,r_frame_rate,has_b_frames,profile,level",
+                        "-of",
+                        "default=nw=1",
+                    ],
+                );
+                let au = probe(
+                    &file,
+                    &[
+                        "-select_streams",
+                        "a",
+                        "-show_entries",
+                        "stream=codec_name,sample_rate,channels",
+                        "-of",
+                        "default=nw=1",
+                    ],
+                );
+                let keys = probe(
+                    &file,
+                    &[
+                        "-select_streams",
+                        "v",
+                        "-skip_frame",
+                        "nokey",
+                        "-show_entries",
+                        "frame=pts_time",
+                        "-of",
+                        "csv=p=0",
+                    ],
+                );
+                let kt: Vec<f64> = keys.lines().filter_map(|l| l.trim().parse().ok()).collect();
+                let gaps: Vec<f64> = kt.windows(2).map(|w| w[1] - w[0]).collect();
+                println!(
+                    "{:<18} {} | {} | keyframe gaps {:?}",
+                    pr.id,
+                    v.replace('\n', " "),
+                    au.replace('\n', " "),
+                    gaps
+                );
+                let want_codec = if pr.codec == Codec::Hevc {
+                    "hevc"
+                } else {
+                    "h264"
+                };
+                assert_eq!(field(&v, "codec_name"), want_codec, "{}", pr.id);
+                assert_eq!(field(&v, "width"), pr.w.to_string(), "{}", pr.id);
+                assert_eq!(field(&v, "height"), pr.h.to_string(), "{}", pr.id);
+                assert_eq!(field(&v, "r_frame_rate"), "60/1", "{}", pr.id);
+                let bf: u8 = field(&v, "has_b_frames").parse().unwrap_or(9);
+                assert!(bf <= pr.max_bframes, "{}: {bf} B-frames", pr.id);
+                if pr.codec == Codec::H264 {
+                    let want = if pr.profile == "main" { "Main" } else { "High" };
+                    assert_eq!(field(&v, "profile"), want, "{}", pr.id);
+                }
+                if pr.level == Some("4.2") {
+                    assert_eq!(field(&v, "level"), "42", "{}", pr.id);
+                }
+                assert!(kt.len() >= 3, "{}: keyframes {kt:?}", pr.id);
+                assert!(
+                    gaps.iter().all(|g| (g - pr.gop_s as f64).abs() < 0.05),
+                    "{}: GOP {gaps:?}",
+                    pr.id
+                );
+                assert_eq!(field(&au, "codec_name"), "aac", "{}", pr.id);
+                assert_eq!(field(&au, "channels"), "2", "{}", pr.id);
+                assert_eq!(
+                    field(&au, "sample_rate"),
+                    pr.audio.rate.to_string(),
+                    "{}",
+                    pr.id
+                );
+                checked += 1;
+                std::fs::remove_file(&file).ok();
+            }
+        }
+        println!("{checked} presets verified");
+        assert!(checked >= 14);
+    }
 
     /// End-to-end PC mode: FFmpeg captures the real screen, mixed PCM audio
     /// is piped in, GPU-encoded MKV comes out. Needs a display and FFmpeg.
@@ -1201,6 +1843,8 @@ mod tests {
             framing: Framing::Fit,
             pc: Some(pc),
             file: true,
+            preset: None,
+            container: "flv",
         };
         let cfg = VideoConfig {
             codec: crate::mkv::CODEC_H264,
@@ -1323,7 +1967,7 @@ mod tests {
             height: ch as u16,
             csd: Vec::new(),
         };
-        let p = preset(YOUTUBE, "1440p60");
+        let p = *Platform::Youtube.preset("yt-1440p60-h264");
         let jobs = [
             Job {
                 ffmpeg: ffmpeg.clone(),
@@ -1336,6 +1980,8 @@ mod tests {
                 framing: Framing::Fit,
                 pc: Some(Arc::new(base)),
                 file: true,
+                preset: None,
+                container: "flv",
             },
             Job {
                 ffmpeg: ffmpeg.clone(),
@@ -1348,6 +1994,8 @@ mod tests {
                 framing: Framing::Fit,
                 pc: Some(Arc::new(second)),
                 file: false,
+                preset: Some(p),
+                container: "flv",
             },
         ];
         let mut dests: Vec<Dest> = jobs
@@ -1453,6 +2101,204 @@ mod tests {
         }
     }
 
+    /// Splits an Annex-B H.264 file into (csd, access units).
+    fn load_sample(path: &str) -> (Vec<u8>, Vec<(bool, Vec<u8>)>) {
+        let data = std::fs::read(path).unwrap();
+        let mut csd = Vec::new();
+        let mut aus: Vec<(bool, Vec<u8>)> = Vec::new();
+        for n in crate::mkv::split_nals(&data) {
+            match n[0] & 0x1F {
+                9 => aus.push((false, Vec::new())),
+                7 | 8 if aus.len() <= 1 => {
+                    csd.extend_from_slice(&[0, 0, 0, 1]);
+                    csd.extend_from_slice(n);
+                }
+                7 | 8 => {}
+                t => {
+                    if let Some(au) = aus.last_mut() {
+                        au.0 |= t == 5;
+                        au.1.extend_from_slice(&[0, 0, 0, 1]);
+                        au.1.extend_from_slice(n);
+                    }
+                }
+            }
+        }
+        aus.retain(|a| !a.1.is_empty());
+        (csd, aus)
+    }
+
+    /// The fifo muxer keeps one FFmpeg running through a network outage:
+    /// a local RTMP server (FFmpeg -listen) is killed and restarted while a
+    /// real Job streams the phone sample to it. Status must go live →
+    /// reconnecting → live, and the second server must receive video.
+    /// `PHONECAST_SAMPLE=<file.h264> cargo test fifo_reconnect -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn fifo_reconnect() {
+        let ffmpeg = find_ffmpeg().expect("ffmpeg");
+        let enc = probe_encoders(&ffmpeg);
+        let (csd, aus) = load_sample(&std::env::var("PHONECAST_SAMPLE").unwrap());
+        let url = "rtmp://127.0.0.1:19361/live/test";
+        let dir = std::env::temp_dir();
+        let listen = |out: &str| {
+            Command::new(&ffmpeg)
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-listen",
+                    "1",
+                    "-i",
+                    url,
+                ])
+                .args(["-c", "copy"])
+                .arg(dir.join(out))
+                .stdin(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        let mut l1 = Some(listen("phonecast_rtmp_1.flv"));
+        std::thread::sleep(Duration::from_millis(1500));
+        let preset = *Platform::Twitch.preset("tw-720p60");
+        let job = Job {
+            ffmpeg: ffmpeg.clone(),
+            url: url.into(),
+            encoder: enc.h264.clone(),
+            w: preset.w,
+            h: preset.h,
+            kbps: preset.kbps,
+            hevc: false,
+            framing: Framing::Blur,
+            pc: None,
+            file: false,
+            preset: Some(preset),
+            container: "flv",
+        };
+        let cfg = VideoConfig {
+            codec: crate::mkv::CODEC_H264,
+            width: 2376,
+            height: 1080,
+            csd,
+        };
+        let dest = spawn_job(job, cfg, Arc::new(|| {}), "Test");
+        let Dest { mut tx, status, .. } = dest;
+        let start = Instant::now();
+        let mut audio_t = 0i64;
+        let mut states: Vec<(f64, String)> = Vec::new();
+        let mut l2 = None;
+        for (i, (key, au)) in aus.iter().cycle().take(60 * 18).enumerate() {
+            let pts = 1_000_000 + i as i64 * 16_667;
+            tx.push(&Media::Video {
+                pts,
+                key: *key && i < aus.len(),
+                data: Arc::new(au.clone()),
+            });
+            while audio_t < pts + 16_667 {
+                tx.push(&Media::Audio {
+                    pts: audio_t.max(1_000_000),
+                    pcm: Arc::new(vec![0u8; 1920]),
+                });
+                audio_t += 10_000;
+            }
+            let t = start.elapsed().as_secs_f64();
+            if i == 60 * 6 {
+                if let Some(mut l) = l1.take() {
+                    l.kill().ok();
+                    l.wait().ok();
+                }
+                println!("{t:5.1}s server killed");
+            }
+            if i == 60 * 10 {
+                l2 = Some(listen("phonecast_rtmp_2.flv"));
+                println!("{t:5.1}s server restarted");
+            }
+            let st = status.lock().unwrap().state.clone();
+            if states.last().map(|s| &s.1) != Some(&st) {
+                println!("{t:5.1}s state {st}");
+                states.push((t, st));
+            }
+            let due = Duration::from_micros((i as u64 + 1) * 16_667);
+            if let Some(w) = due.checked_sub(start.elapsed()) {
+                std::thread::sleep(w);
+            }
+        }
+        let s = status.lock().unwrap().clone();
+        println!(
+            "final: {} reconnects={} err={:?}",
+            s.state, s.reconnects, s.error
+        );
+        drop(tx);
+        std::thread::sleep(Duration::from_secs(2));
+        if let Some(mut l) = l2 {
+            l.kill().ok();
+            l.wait().ok();
+        }
+        let names: Vec<&str> = states.iter().map(|s| s.1.as_str()).collect();
+        assert!(names.starts_with(&["connecting", "live"]), "{names:?}");
+        assert!(names.contains(&"reconnecting"), "{names:?}");
+        assert_eq!(names.last(), Some(&"live"), "{names:?}");
+        assert!(s.reconnects >= 1);
+        let second = dir.join("phonecast_rtmp_2.flv");
+        let out = Command::new(ffmpeg.with_file_name("ffprobe.exe"))
+            .args(["-v", "error", "-select_streams", "v", "-count_packets"])
+            .args([
+                "-show_entries",
+                "stream=codec_name,width,height,nb_read_packets",
+            ])
+            .args(["-of", "csv=p=0"])
+            .arg(&second)
+            .output()
+            .unwrap();
+        let probe = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        println!("second server got: {probe}");
+        assert!(probe.starts_with("h264,1280,720"), "{probe}");
+    }
+
+    /// The GPU filter graph must produce exactly the preset size for every
+    /// framing (overlay_cuda used to pad 1080 → 1088).
+    /// `PHONECAST_SAMPLE=<file.h264> cargo test gpu_framing_sizes -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn gpu_framing_sizes() {
+        let ffmpeg = find_ffmpeg().expect("ffmpeg");
+        let sample = std::env::var("PHONECAST_SAMPLE").unwrap();
+        let out = std::env::temp_dir().join("phonecast_framing.flv");
+        let mut bad = Vec::new();
+        for (w, h) in [
+            (1280, 720),
+            (1664, 936),
+            (1920, 1080),
+            (2560, 1440),
+            (3840, 2160),
+        ] {
+            for framing in [Framing::Blur, Framing::Fit, Framing::Fill] {
+                let (hw, filter) = video_filter(true, framing, w, h);
+                let st = Command::new(&ffmpeg)
+                    .args(["-hide_banner", "-loglevel", "error", "-y"])
+                    .args(hw)
+                    .args(["-i", &sample, "-t", "1", "-filter_complex", &filter])
+                    .args(["-map", "[v]", "-c:v", "h264_nvenc", "-f", "flv"])
+                    .arg(&out)
+                    .status()
+                    .unwrap();
+                assert!(st.success(), "{framing:?} {w}x{h}");
+                let o = Command::new(ffmpeg.with_file_name("ffprobe.exe"))
+                    .args(["-v", "error", "-select_streams", "v"])
+                    .args(["-show_entries", "stream=width,height", "-of", "csv=p=0"])
+                    .arg(&out)
+                    .output()
+                    .unwrap();
+                let got = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                println!("{framing:?} {w}x{h} -> {got}");
+                if got != format!("{w},{h}") {
+                    bad.push(format!("{framing:?} {w}x{h} -> {got}"));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{bad:?}");
+    }
+
     /// End-to-end: live MKV over stdin → FFmpeg → GPU encode → FLV file
     /// (a file stands in for YouTube). Run with
     /// `PHONECAST_SAMPLE=<file.h264> cargo test live_pipeline -- --ignored --nocapture`.
@@ -1496,6 +2342,8 @@ mod tests {
                 framing,
                 pc: None,
                 file: false,
+                preset: None,
+                container: "flv",
             };
             let cfg = VideoConfig {
                 codec: crate::mkv::CODEC_H264,
@@ -1504,7 +2352,7 @@ mod tests {
                 csd: csd.clone(),
             };
             let status = Arc::new(Mutex::new(DestStatus {
-                id: "test",
+                id: "test".into(),
                 name: "Test",
                 state: "connecting".into(),
                 fps: 0.0,

@@ -667,10 +667,13 @@ new ResizeObserver(() => renderOverlayBoxes()).observe($("screen"));
 
 let isLive = false;
 let liveSettings = null;
-const DEST_ICON = {
-  youtube: '<div class="dest-icon yt"><svg viewBox="0 0 24 24"><path d="M22 8.5a3 3 0 0 0-2.1-2.1C18 6 12 6 12 6s-6 0-7.9.4A3 3 0 0 0 2 8.5 31 31 0 0 0 2 12a31 31 0 0 0 .1 3.5 3 3 0 0 0 2 2.1C6 18 12 18 12 18s6 0 7.9-.4a3 3 0 0 0 2.1-2.1A31 31 0 0 0 22 12a31 31 0 0 0 0-3.5z"/><path d="m10 15 5-3-5-3z"/></svg></div>',
-  twitch: '<div class="dest-icon tw"><svg viewBox="0 0 24 24"><path d="M21 2H3v16h5v4l4-4h5l4-4z"/><path d="M11 11V7M16 11V7"/></svg></div>',
-};
+// Platform name (from the live status) -> icon id in golive.js.
+const PLATFORM_BY_NAME = { YouTube: "youtube", Twitch: "twitch", Kick: "kick", "Facebook Gaming": "facebook", "Custom server": "custom" };
+function destIcon(name) {
+  const id = PLATFORM_BY_NAME[name];
+  const icon = window.PLATFORM_ICON?.[id];
+  return icon ? `<div class="dest-icon" style="--c:${window.PLATFORM_COLOR[id]}">${icon}</div>` : "";
+}
 const STATE_TEXT = { live: "Live", connecting: "Connecting", reconnecting: "Reconnecting", error: "Error", stopped: "Stopped" };
 
 function renderLive(l) {
@@ -686,9 +689,9 @@ function renderLive(l) {
   $("liveDests").innerHTML = l.destinations
     .map((d) => {
       const meta = d.state === "live"
-        ? `${(d.kbps / 1000).toFixed(1)} Mbps · ${Math.round(d.fps)} fps · ${d.quality}${d.dropped ? ` · ${d.dropped} dropped` : ""}`
-        : d.reconnects ? `Reconnect attempt ${d.reconnects}` : `Starting ${d.quality}`;
-      return `<div class="ldest">${DEST_ICON[d.id] || ""}<b>${d.name}</b>
+        ? `${d.quality} · ${(d.kbps / 1000).toFixed(1)} Mbps · ${Math.round(d.fps)} fps${d.dropped ? ` · ${d.dropped} dropped` : ""}${d.reconnects ? ` · reconnected ${d.reconnects}×` : ""}`
+        : d.state === "reconnecting" ? "Connection dropped — reconnecting by itself" : `Starting ${d.quality}`;
+      return `<div class="ldest">${destIcon(d.name)}<b>${escapeHtml(d.name)}</b>
         <span class="state ${d.state}">${STATE_TEXT[d.state] || d.state}</span>
         <span class="meta">${meta}</span>
         ${d.error && d.state !== "live" ? `<span class="err">${escapeHtml(d.error)}</span>` : ""}</div>`;
@@ -696,129 +699,10 @@ function renderLive(l) {
     .join("");
 }
 
-const modal = $("liveModal");
-const dests = {};
-for (const el of modal.querySelectorAll(".dest")) {
-  const id = el.dataset.dest;
-  const d = (dests[id] = {
-    el,
-    enabled: el.querySelector(".enabled"),
-    key: el.querySelector(".key"),
-    quality: el.querySelector(".quality"),
-  });
-  d.enabled.addEventListener("change", () => {
-    el.classList.toggle("on", d.enabled.checked);
-    if (d.enabled.checked && !d.key.value && !d.key.classList.contains("saved")) setTimeout(() => d.key.focus(), 200);
-    updateUpload();
-  });
-  d.quality.addEventListener("change", updateUpload);
-  el.querySelector(".reveal").addEventListener("click", (e) => {
-    e.preventDefault();
-    d.key.type = d.key.type === "password" ? "text" : "password";
-  });
-}
-let framing = "blur";
-for (const b of $("framing").querySelectorAll("button")) {
-  b.addEventListener("click", () => {
-    framing = b.dataset.v;
-    for (const x of $("framing").querySelectorAll("button")) x.classList.toggle("on", x === b);
-  });
-}
 
-function fillModal(s) {
-  liveSettings = s;
-  $("ffmpegMissing").classList.toggle("hidden", s.ffmpeg);
-  $("encName").textContent = s.encoder || "your GPU";
-  for (const id of ["youtube", "twitch"]) {
-    const d = dests[id];
-    const cfg = s[id];
-    d.enabled.checked = cfg.enabled;
-    d.el.classList.toggle("on", cfg.enabled);
-    d.quality.innerHTML = cfg.presets.map((p) => `<option value="${p.id}" data-kbps="${p.kbps}">${p.label}</option>`).join("");
-    d.quality.value = cfg.quality;
-    d.key.value = "";
-    d.key.type = "password";
-    d.key.classList.toggle("saved", cfg.hasKey);
-    d.key.placeholder = cfg.hasKey
-      ? "Saved ✓ — paste a new key to replace it"
-      : `Paste your ${id === "youtube" ? "YouTube" : "Twitch"} stream key`;
-  }
-  framing = s.framing || "blur";
-  for (const x of $("framing").querySelectorAll("button")) x.classList.toggle("on", x.dataset.v === framing);
-  updateUpload();
-}
-
-function updateUpload() {
-  let kbps = 0;
-  for (const d of Object.values(dests)) {
-    if (d.enabled.checked) kbps += Number(d.quality.selectedOptions[0]?.dataset.kbps || 0) + 160;
-  }
-  // Leave ~30% headroom so the stream never stutters on a busy connection.
-  $("uploadNeed").textContent = kbps ? `${Math.ceil((kbps * 1.3) / 1000)} Mbps` : "—";
-}
-
-function collect() {
-  const out = { framing };
-  for (const [id, d] of Object.entries(dests)) {
-    out[id] = { enabled: d.enabled.checked, quality: d.quality.value };
-    if (d.key.value.trim()) out[id].key = d.key.value.trim();
-  }
-  return out;
-}
-
-async function saveLive() {
-  const s = await invoke("save_live_settings", { settings: collect() });
-  fillModal(s);
-  return s;
-}
-
-function openModal() {
-  invoke("get_live_settings").then(fillModal);
-  modal.classList.remove("hidden");
-}
-function closeModal() {
-  modal.classList.add("hidden");
-  for (const d of Object.values(dests)) d.key.value = ""; // never keep keys in the page
-}
-modal.addEventListener("click", (e) => {
-  if (e.target === modal || e.target.closest("[data-close]")) closeModal();
-});
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !modal.classList.contains("hidden")) closeModal();
   if (e.key === "Escape") $("hotkeysModal").classList.add("hidden");
 });
-
-$("liveSave").onclick = async () => {
-  try {
-    await saveLive();
-    toast("Saved");
-  } catch (e) {
-    toast(String(e));
-  }
-};
-$("liveStart").onclick = async () => {
-  const btn = $("liveStart");
-  btn.disabled = true;
-  try {
-    await saveLive();
-    await invoke("start_live");
-    closeModal();
-    toast("Going live…");
-  } catch (e) {
-    toast(String(e));
-  } finally {
-    btn.disabled = false;
-  }
-};
-$("liveBtn").onclick = async () => {
-  if (isLive) {
-    await invoke("stop_live");
-    toast("Stream ended");
-  } else {
-    openModal();
-  }
-};
-
 function drawSpark() {
   const c = $("spark");
   const w = (c.width = c.clientWidth * devicePixelRatio);

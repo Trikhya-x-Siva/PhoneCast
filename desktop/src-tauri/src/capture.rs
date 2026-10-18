@@ -942,7 +942,10 @@ mod tests {
         assert_eq!(back.source, s.source);
         assert_eq!(back.overlays, s.overlays);
         assert!(s.needs_compositor());
-        s.source = Source::Screen { output: 0 };
+        s.source = Source::Screen {
+            output: 0,
+            id: String::new(),
+        };
         assert!(s.needs_compositor()); // overlays force it
         s.overlays.clear();
         assert!(!s.needs_compositor());

@@ -875,6 +875,8 @@ impl Core {
                 framing: live::Framing::Fit,
                 pc: Some(pc.clone()),
                 file: true,
+                preset: None,
+                container: "matroska",
             };
             let cfg = VideoConfig {
                 codec: crate::mkv::CODEC_H264,
