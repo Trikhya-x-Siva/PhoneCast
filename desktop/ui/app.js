@@ -274,6 +274,7 @@ function render(s) {
   renderReplay(s.replay);
   renderScene(s);
   renderPrivacy(s);
+  if (window.renderQuickBanner) window.renderQuickBanner(s);
 }
 
 

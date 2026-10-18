@@ -462,8 +462,9 @@ class CaptureService : Service(), StreamClient.Listener {
         }
     }
 
-    override fun onKeyframeRequest() {
-        worker.post { encoder?.requestKeyframe() }
+    override fun onKeyframeRequest(urgent: Boolean) {
+        // Urgent (back to the game after the action clip): not rate-limited.
+        worker.post { encoder?.requestKeyframe(force = urgent) }
     }
 
     override fun onSetMic(on: Boolean) {

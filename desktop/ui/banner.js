@@ -299,9 +299,12 @@
 
     const pad = Math.round(H * 0.12);
     const d = H - pad * 2;
-    avatar(g, pad + d / 2, H / 2 + 3, d, s, t);
+    // With the channel's character clip, the app lays it over the strip's
+    // left (as wide as 0.66 of a 16:9 frame at the strip's height).
+    const clip = (s._clips || []).includes("gaming");
+    if (!clip) avatar(g, pad + d / 2, H / 2 + 3, d, s, t);
 
-    const x = pad + d + pad * 1.6;
+    const x = clip ? Math.round(H * 1.1733) + pad * 0.6 : pad + d + pad * 1.6;
     shinyText(
       g,
       s.title || "Your channel name",
@@ -671,5 +674,30 @@
     draw(g, W, H, s, t, p);
   }
 
-  window.BannerArt = { draw, bannerAt, scene, stinger, animated, LOOP_SECONDS, BANNER_LOOP_SECONDS, FPS, SCENE_SECONDS: 4, STINGER_SECONDS, STINGER_HOLD_AT };
+  // "Banner off": a quiet strip with just a thin accent line and the logo
+  // small on the right (the stream keeps its size; nothing restarts).
+  function plain(g, W, H, s) {
+    g.save();
+    const bg = g.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, "#07080d");
+    bg.addColorStop(1, "#0c0e16");
+    g.fillStyle = bg;
+    g.fillRect(0, 0, W, H);
+    g.globalAlpha = 0.6;
+    g.fillStyle = s.color;
+    g.fillRect(0, 0, W, 2);
+    g.globalAlpha = 1;
+    if (s.logo) {
+      const d = Math.round(H * 0.42);
+      const x = W - d - H * 0.25, y = (H - d) / 2;
+      g.globalAlpha = 0.85;
+      g.beginPath();
+      g.arc(x + d / 2, y + d / 2, d / 2, 0, TAU);
+      g.clip();
+      drawSquare(g, s.logo, x, y, d);
+    }
+    g.restore();
+  }
+
+  window.BannerArt = { draw, bannerAt, plain, scene, stinger, animated, LOOP_SECONDS, BANNER_LOOP_SECONDS, FPS, SCENE_SECONDS: 4, STINGER_SECONDS, STINGER_HOLD_AT };
 })();

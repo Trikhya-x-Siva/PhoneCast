@@ -119,8 +119,10 @@ pub fn spawn(port: u16, state: Arc<Mutex<AdbState>>) {
                         if present || run(adb, &["-s", serial, "reverse", &spec, &spec]).is_some() {
                             reversed.insert(serial.clone());
                         }
-                        if !granted.contains(serial) && grant_usage_access(adb, serial) {
-                            granted.insert(serial.clone());
+                        // Once per phone: some phones (ColorOS) refuse it, and an
+                        // adb shell every 2 s is needless load on the link.
+                        if granted.insert(serial.clone()) {
+                            grant_usage_access(adb, serial);
                         }
                     }
                 }

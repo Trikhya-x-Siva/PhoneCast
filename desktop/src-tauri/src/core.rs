@@ -168,6 +168,7 @@ pub struct Core {
 impl Core {
     pub fn start(app: AppHandle) -> std::io::Result<Arc<Core>> {
         let prefs = Prefs::load();
+        crate::banner_feed::set_on(prefs.banner_on);
         let mixer = Mixer::start();
         // Devices by stable ID: the same mic and voice app as last time, or a
         // warning if the mic is gone (never a silent switch to another one).
@@ -808,11 +809,16 @@ impl Core {
             diag::log("phone", "disconnected");
             let gm = self.gamemode.clone();
             std::thread::spawn(move || gm.restore());
-            let mut i = self.inner.lock().unwrap();
-            i.connected = false;
-            i.latency_ms = None;
-            i.fps = 0;
-            i.mbps = 0.0;
+            {
+                let mut i = self.inner.lock().unwrap();
+                i.connected = false;
+                i.latency_ms = None;
+                i.fps = 0;
+                i.mbps = 0.0;
+            }
+            // Live: keep the broadcast going on Be right back (the scene clock
+            // sends it) until the phone and the game are back.
+            self.auto_cover("the phone disconnected");
         }
     }
 
@@ -825,6 +831,20 @@ impl Core {
                     height: u16::from_be_bytes([payload[3], payload[4]]),
                     csd: payload[5..].to_vec(),
                 };
+                // While live, a portrait picture is never the game (home screen,
+                // this app, a chat): cover it instead of restarting the encoders
+                // (two restarts in a row at reconnect broke the GPU encoder).
+                let portrait = cfg.height > cfg.width;
+                let live_landscape = self
+                    .inner
+                    .lock()
+                    .unwrap()
+                    .video
+                    .as_ref()
+                    .is_some_and(|v| v.width > v.height);
+                if portrait && live_landscape && self.has_outputs_running() {
+                    self.auto_cover("the phone picture turned portrait");
+                }
                 let scene_on =
                     !matches!(*self.scene.lock().unwrap(), crate::scenes::SceneState::Off);
                 {
@@ -842,10 +862,17 @@ impl Core {
                     if scene_on && !self.is_pc_mode() {
                         // The scene keeps the stream; the phone's setup goes
                         // out when the game comes back (no output restart).
-                        i.video = Some(cfg.clone());
+                        // A portrait setup is not kept as the stream's shape.
+                        if !(portrait && live_landscape) {
+                            i.video = Some(cfg.clone());
+                        }
                         *self.pending_phone_cfg.lock().unwrap() = true;
                         drop(i);
                         self.broadcast(ty, flags, pts, &payload);
+                        // The game's shape is back: end a cover the app put up.
+                        if !portrait {
+                            self.end_auto_cover();
+                        }
                         return;
                     }
                     if self.is_pc_mode() {
@@ -904,7 +931,9 @@ impl Core {
                     }
                 };
                 if ask {
-                    self.request_keyframe();
+                    // Urgent: the phone skips ordinary requests made within
+                    // 2 s of the last one, and the hold would freeze that long.
+                    self.send_phone(REQUEST_KEYFRAME, &[1]);
                 }
                 if back {
                     self.mixer.set_scene_audio(false);
@@ -1373,6 +1402,7 @@ impl Core {
             status["scene"] = json!(scene_name);
             let privacy_on = self.prefs.lock().unwrap().privacy_cover;
             let on_screen = self.phone_app.lock().unwrap().clone();
+            status["bannerOn"] = json!(crate::banner_feed::is_on());
             status["privacy"] = json!({
                 "on": privacy_on,
                 "app": on_screen,
@@ -1643,6 +1673,16 @@ impl Core {
         self.send_phone(SET_PRIVACY, &[on as u8]);
     }
 
+    pub fn set_banner_on(&self, on: bool) {
+        {
+            let mut p = self.prefs.lock().unwrap();
+            p.banner_on = on;
+            p.save();
+        }
+        crate::banner_feed::set_on(on);
+        diag::log("live", format!("banner {}", if on { "on" } else { "off" }));
+    }
+
     pub fn set_privacy_cover(&self, on: bool) {
         {
             let mut p = self.prefs.lock().unwrap();
@@ -1670,7 +1710,7 @@ impl Core {
         if !self.prefs.lock().unwrap().privacy_cover {
             return;
         }
-        let design = self.last_design.lock().unwrap().clone();
+        let design = self.ready_design("brb");
         let scene = self.scene.lock().unwrap().name().map(str::to_string);
         if !game {
             if scene.is_none() {
@@ -1682,14 +1722,85 @@ impl Core {
                     ),
                 }
             }
-        } else if self.auto_brb.swap(false, Ordering::SeqCst) && scene.as_deref() == Some("brb") {
-            self.set_scene(None, &design).ok();
+        } else {
+            // A portrait setup left over from outside the game ends with the
+            // game's own (landscape) one, which the phone sends on its own.
+            self.end_auto_cover();
+        }
+    }
+
+    /// The design of a ready `name` scene for the current picture: the last
+    /// one the window used if ready, else any ready one (the window's design
+    /// key can change while it loads; any ready version beats a frozen frame).
+    fn ready_design(&self, name: &str) -> String {
+        let last = self.last_design.lock().unwrap().clone();
+        let Ok((key, _)) = self.scene_key(name, &last) else {
+            return last;
+        };
+        let cache = self.scene_cache.lock().unwrap();
+        if cache.contains_key(&key) {
+            return last;
+        }
+        // Keys are "{name}-{design}-{rest}"; the rest must match (size, codec, clip).
+        let rest = &key[name.len() + 1 + last.len()..];
+        let prefix = format!("{name}-");
+        cache
+            .keys()
+            .filter_map(|k| {
+                k.strip_prefix(&prefix)?
+                    .strip_suffix(rest)
+                    .map(str::to_string)
+            })
+            .find(|d| !d.contains('-'))
+            .unwrap_or(last)
+    }
+
+    /// Puts up Be right back by itself while live (phone gone, or not on
+    /// the game), unless a scene is already on. Ended by `end_auto_cover`.
+    fn auto_cover(&self, why: &str) {
+        if !self.has_outputs_running() || !self.prefs.lock().unwrap().privacy_cover {
+            return;
+        }
+        let off = matches!(*self.scene.lock().unwrap(), crate::scenes::SceneState::Off);
+        if !off {
+            return;
+        }
+        match self.set_scene(Some("brb"), &self.ready_design("brb")) {
+            Ok(()) => {
+                self.auto_brb.store(true, Ordering::SeqCst);
+                diag::log("privacy", format!("Be right back: {why}"));
+            }
+            Err(e) => diag::log("privacy", format!("{why}; Be right back not ready ({e})")),
+        }
+    }
+
+    /// Back to the game after a cover the app put up (the user's own scenes
+    /// stay until the user ends them).
+    fn end_auto_cover(&self) {
+        let game = self
+            .phone_app
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_none_or(|v| v["game"].as_bool().unwrap_or(true));
+        let brb = self.scene.lock().unwrap().name() == Some("brb");
+        // Only with the game's shape back: leaving on a portrait keyframe
+        // would restart the encoders in portrait.
+        let landscape = {
+            let i = self.inner.lock().unwrap();
+            let wide = |v: &Option<VideoConfig>| v.as_ref().is_some_and(|v| v.width > v.height);
+            !wide(&i.video) || wide(&i.phone_video)
+        };
+        if game && brb && landscape && self.auto_brb.swap(false, Ordering::SeqCst) {
+            diag::log("privacy", "back to the game");
+            self.set_scene(None, &self.ready_design("stinger")).ok();
         }
     }
 
     /// A scene the user picked: the privacy cover no longer owns it.
     pub fn user_set_scene(&self, name: Option<&str>, design: &str) -> Result<(), String> {
         self.auto_brb.store(false, Ordering::SeqCst);
+        *self.last_design.lock().unwrap() = design.to_string();
         self.set_scene(name, design)
     }
 
@@ -1811,7 +1922,7 @@ impl Core {
         let started = Instant::now();
         let hevc = cfg.codec == crate::mkv::CODEC_H265;
         // A clip that fails to cut out falls back to the drawn character.
-        let clip = crate::clips::prepare(&ffmpeg, name, cfg.width as u32, cfg.height as u32)
+        let clip = crate::clips::prepare(&ffmpeg, name, cfg.width as u32, cfg.height as u32, None)
             .unwrap_or_else(|e| {
                 diag::log("scene", format!("{name}: clip not used: {e}"));
                 None

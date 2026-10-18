@@ -33,7 +33,7 @@ u8 type | u8 flags | i64 ptsUs | u32 len | payload[len]
 | type | name | payload |
 |---|---|---|
 | 0x81 | SET_BITRATE | u32 bits per second |
-| 0x82 | REQUEST_KEYFRAME | — |
+| 0x82 | REQUEST_KEYFRAME | optional u8 1 = urgent (not rate-limited) |
 | 0x83 | PING | i64 pcTimeUs |
 | 0x84 | STOP | — |
 | 0x85 | SET_MIC | u8 1 = send the phone mic |

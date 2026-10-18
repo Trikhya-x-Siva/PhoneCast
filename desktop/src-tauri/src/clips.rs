@@ -43,7 +43,7 @@ pub struct ClipOpts {
 
 /// The clip for a scene, if the channel has one.
 pub fn clip_for(name: &str) -> Option<(PathBuf, ClipOpts)> {
-    if !matches!(name, "starting" | "brb" | "thanks" | "stinger") {
+    if !matches!(name, "starting" | "brb" | "thanks" | "stinger" | "gaming") {
         return None;
     }
     let path = clips_dir().join(format!("{name}.mp4"));
@@ -69,7 +69,7 @@ pub fn clip_for(name: &str) -> Option<(PathBuf, ClipOpts)> {
 
 /// Scene names that have a clip (the scene art then leaves the character out).
 pub fn available() -> Vec<String> {
-    ["starting", "brb", "thanks", "stinger"]
+    ["starting", "brb", "thanks", "stinger", "gaming"]
         .iter()
         .filter(|n| clip_for(n).is_some())
         .map(|n| n.to_string())
@@ -161,11 +161,22 @@ fn screen_green(ffmpeg: &Path, clip: &Path, at: f64) -> Result<(u8, u8, u8), Str
 }
 
 /// Cuts the character out of `clip`, sized for a `w`x`h` scene. Kept on
-/// disk, so the same clip at the same size is only cut once.
-pub fn prepare(ffmpeg: &Path, name: &str, w: u32, h: u32) -> Result<Option<Prepared>, String> {
+/// disk, so the same clip at the same size is only cut once. `loop_frames`
+/// makes the loop exactly that long (the banner's 20 s loop).
+pub fn prepare(
+    ffmpeg: &Path,
+    name: &str,
+    w: u32,
+    h: u32,
+    loop_frames: Option<usize>,
+) -> Result<Option<Prepared>, String> {
     let Some((clip, opts)) = clip_for(name) else {
         return Ok(None);
     };
+    // One cut at a time: two scenes made at once (e.g. Be right back for the
+    // privacy cover and a click) removed each other's files mid-cut.
+    static CUTTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = CUTTING.lock().unwrap_or_else(|e| e.into_inner());
     let (cw0, ch0) = probe_size(ffmpeg, &clip).unwrap_or((1920, 1080));
     let ch = even(h as f64 * HEIGHT);
     let cw = even(ch as f64 * cw0 as f64 / ch0 as f64 * KEEP_WIDTH);
@@ -176,7 +187,11 @@ pub fn prepare(ffmpeg: &Path, name: &str, w: u32, h: u32) -> Result<Option<Prepa
         y: h as i64 - ch as i64,
         pingpong: opts.pingpong,
     };
-    let root = crate::scenes::scenes_dir().join(format!("{name}-{}-{cw}x{ch}", stamp(name)));
+    let root = crate::scenes::scenes_dir().join(format!(
+        "{name}-{}-{cw}x{ch}{}",
+        stamp(name),
+        loop_frames.map(|n| format!("-L{n}")).unwrap_or_default()
+    ));
     let seq = root.join("seq");
     if let Ok(n) = std::fs::read_to_string(root.join("done")) {
         if let Ok(n) = n.trim().parse::<usize>() {
@@ -190,7 +205,8 @@ pub fn prepare(ffmpeg: &Path, name: &str, w: u32, h: u32) -> Result<Option<Prepa
     if let Ok(rd) = std::fs::read_dir(crate::scenes::scenes_dir()) {
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().to_string();
-            if n.starts_with(&format!("{name}-clip")) && e.path() != root {
+            let same_kind = n.contains("-L") == loop_frames.is_some();
+            if n.starts_with(&format!("{name}-clip")) && same_kind && e.path() != root {
                 std::fs::remove_dir_all(e.path()).ok();
             }
         }
@@ -265,7 +281,10 @@ pub fn prepare(ffmpeg: &Path, name: &str, w: u32, h: u32) -> Result<Option<Prepa
     if n < 2 {
         return Err("the clip gave no frames".into());
     }
-    let order = play_order(n, opts.pingpong);
+    let order = match loop_frames {
+        Some(t) => fitted_loop(n, t),
+        None => play_order(n, opts.pingpong),
+    };
     for (i, src) in order.iter().enumerate() {
         let from = raw.join(format!("{:04}.png", src + 1));
         let to = seq.join(format!("{:04}.png", i + 1));
@@ -278,6 +297,15 @@ pub fn prepare(ffmpeg: &Path, name: &str, w: u32, h: u32) -> Result<Option<Prepa
         dir: seq,
         ..place(order.len())
     }))
+}
+
+/// Forward-and-back loops fitted into exactly `t` frames, played a little
+/// faster or slower so a whole number of them fits (seamless at the wrap).
+pub fn fitted_loop(n: usize, t: usize) -> Vec<usize> {
+    let cycle: Vec<usize> = (0..n).chain((1..n.saturating_sub(1)).rev()).collect();
+    let len = cycle.len().max(1);
+    let k = ((t as f64 / len as f64).round() as usize).max(1);
+    (0..t).map(|i| cycle[(i * k * len / t) % len]).collect()
 }
 
 /// Frame order: forward only, or forward then back with short holds at each
@@ -340,6 +368,18 @@ mod tests {
         assert_eq!(play_order(5, false), vec![0, 1, 2, 3, 4]);
     }
 
+    #[test]
+    fn fitted_loop_is_exact_and_seamless() {
+        for (n, t) in [(144, 480), (120, 480), (300, 480), (10, 480)] {
+            let v = fitted_loop(n, t);
+            assert_eq!(v.len(), t);
+            for w in 0..t {
+                let (a, b) = (v[w], v[(w + 1) % t]);
+                assert!(a.abs_diff(b) <= 2, "n={n} at {w}: {a}->{b}");
+            }
+        }
+    }
+
     /// Makes the real scenes from the clips in `art/clips` over a plain
     /// drawn background and saves a still of each for a look:
     /// `cargo test clip_scenes_render -- --ignored --nocapture`
@@ -372,7 +412,7 @@ mod tests {
             ("stinger", 120, Some(3.0)),
         ] {
             let t = std::time::Instant::now();
-            let Some(c) = prepare(&ffmpeg, name, 1920, 872).unwrap() else {
+            let Some(c) = prepare(&ffmpeg, name, 1920, 872, None).unwrap() else {
                 println!("{name}: no clip");
                 continue;
             };

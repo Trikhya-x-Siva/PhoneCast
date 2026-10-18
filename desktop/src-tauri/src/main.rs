@@ -4,6 +4,7 @@
 mod adb;
 mod ai;
 mod audio;
+mod banner_feed;
 mod capture;
 mod clips;
 mod compositor;
@@ -201,7 +202,25 @@ fn save_banner_frames(core: CoreState, request: tauri::ipc::Request<'_>) -> Resu
         .live
         .ffmpeg()
         .ok_or("FFmpeg is not installed on this PC")?;
-    let mut cmd = std::process::Command::new(ffmpeg);
+    let num = |k: &str| {
+        request
+            .headers()
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+    };
+    // The channel's character clip (playing on the phone) on the strip's
+    // left, looped to exactly the banner's 20 s.
+    let clip = match (num("x-w"), num("x-h")) {
+        (Some(w), Some(h)) if sizes.len() == 600 => {
+            clips::prepare(&ffmpeg, "gaming", w, h, Some(480)).unwrap_or_else(|e| {
+                diag::log("live", format!("banner clip not used: {e}"));
+                None
+            })
+        }
+        _ => None,
+    };
+    let mut cmd = std::process::Command::new(&ffmpeg);
     cmd.args([
         "-hide_banner",
         "-loglevel",
@@ -211,12 +230,49 @@ fn save_banner_frames(core: CoreState, request: tauri::ipc::Request<'_>) -> Resu
         "30",
         "-i",
     ])
-    .arg(dir.join(format!("%04d.{ext}")))
-    .args([
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p", "-g", "60",
-        "-an",
-    ])
-    .arg(dir.join("loop.mp4"));
+    .arg(dir.join(format!("%04d.{ext}")));
+    // One picture, two files (FFmpeg needs a split to use it twice).
+    let (mut map, mut map2) = ("0:v".to_string(), "0:v".to_string());
+    if let Some(c) = &clip {
+        cmd.args(["-framerate", &clips::CLIP_FPS.to_string(), "-i"])
+            .arg(c.dir.join("%04d.png"))
+            .args([
+                "-filter_complex",
+                "[0:v][1:v]overlay=x=0:y=0:eof_action=pass,format=yuv420p,split=2[b][b2]",
+            ]);
+        map = "[b]".into();
+        map2 = "[b2]".into();
+    }
+    // loop.mp4 for a still-banner fallback; loop.h264 (keyframe every
+    // second, headers on each) for the live feed, which switches banners
+    // at any frame.
+    cmd.args(["-map", &map])
+        .args([
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p", "-g",
+            "60", "-an",
+        ])
+        .arg(dir.join("loop.mp4"))
+        .args(["-map", &map2])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "16",
+            "-pix_fmt",
+            "yuv420p",
+            "-g",
+            "30",
+            "-bf",
+            "0",
+            "-x264-params",
+            "aud=1:repeat-headers=1",
+            "-an",
+            "-f",
+            "h264",
+        ])
+        .arg(dir.join("loop.h264"));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -234,6 +290,7 @@ fn save_banner_frames(core: CoreState, request: tauri::ipc::Request<'_>) -> Resu
     }
     set_current(&name)?;
     prune(&name);
+    banner_feed::changed();
     diag::log(
         "live",
         format!(
@@ -243,6 +300,79 @@ fn save_banner_frames(core: CoreState, request: tauri::ipc::Request<'_>) -> Resu
         ),
     );
     Ok(())
+}
+
+/// The plain strip shown while the banner is switched off (one PNG, the
+/// banner's size), kept as a 1 s H.264 loop for the live feed.
+#[tauri::command(async)]
+fn save_banner_plain(core: CoreState, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(png) = request.body() else {
+        return Err("expected the plain strip".into());
+    };
+    if !png.starts_with(&[0x89, b'P', b'N', b'G']) || png.len() > 8 << 20 {
+        return Err("Not a PNG image".into());
+    }
+    let ffmpeg = core
+        .live
+        .ffmpeg()
+        .ok_or("FFmpeg is not installed on this PC")?;
+    let root = live::banner_frames_root();
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let src = root.join("plain.png");
+    std::fs::write(&src, png).map_err(|e| e.to_string())?;
+    let tmp = root.join("plain.tmp.h264");
+    let mut cmd = std::process::Command::new(ffmpeg);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-loop",
+        "1",
+        "-framerate",
+        "30",
+        "-i",
+    ])
+    .arg(&src)
+    .args([
+        "-frames:v",
+        "30",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "16",
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        "30",
+        "-bf",
+        "0",
+        "-x264-params",
+        "aud=1:repeat-headers=1",
+        "-f",
+        "h264",
+    ])
+    .arg(&tmp);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    std::fs::rename(&tmp, banner_feed::plain_path()).map_err(|e| e.to_string())?;
+    banner_feed::changed();
+    Ok(())
+}
+
+/// Banner on (true) or the plain strip (false), live: no restart.
+#[tauri::command(async)]
+fn set_banner_on(core: CoreState, on: bool) {
+    core.set_banner_on(on);
 }
 
 /// Encodes a scene (JPEG frames back to back in the body, sizes in
@@ -752,6 +882,8 @@ fn main() {
             set_replay_seconds,
             set_game_mode,
             set_privacy_cover,
+            save_banner_plain,
+            set_banner_on,
             save_banner,
             get_banner_asset,
             save_banner_asset,

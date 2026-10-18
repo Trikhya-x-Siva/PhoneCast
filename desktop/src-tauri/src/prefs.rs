@@ -32,6 +32,8 @@ pub struct Prefs {
     pub game_16x9: bool,
     /// Privacy cover: "Be right back" while a non-game app is on the phone.
     pub privacy_cover: bool,
+    /// Banner strip shown (on) or a plain strip (off); switchable live.
+    pub banner_on: bool,
 }
 
 impl Default for Prefs {
@@ -44,6 +46,7 @@ impl Default for Prefs {
             voice_app: "auto".into(),
             game_16x9: false,
             privacy_cover: true,
+            banner_on: true,
         }
     }
 }

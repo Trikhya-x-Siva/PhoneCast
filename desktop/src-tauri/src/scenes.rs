@@ -60,6 +60,8 @@ impl SceneState {
 
     /// True once, about 1/3 s before a stinger reaches its hold: time to ask
     /// the phone for the keyframe the game comes back on.
+    /// True once, a few frames before the action clip's hold: the phone's
+    /// keyframe then lands as the wipe finishes.
     pub fn wants_keyframe(&mut self) -> bool {
         if let SceneState::Stinger {
             next,
@@ -68,7 +70,7 @@ impl SceneState {
             ..
         } = self
         {
-            if !*asked && *next + 20 >= *hold_from {
+            if !*asked && *next + STINGER_LEAD >= *hold_from {
                 *asked = true;
                 return true;
             }
@@ -83,9 +85,15 @@ impl SceneState {
         let leave_now = key
             && match self {
                 SceneState::Leaving { .. } => true,
+                // Any phone keyframe from just before the hold on: waiting for
+                // the hold itself missed keyframes that came a little early
+                // and then waited ~2 s for the next one (a frozen hold).
                 SceneState::Stinger {
-                    next, hold_from, ..
-                } => *next >= *hold_from,
+                    next,
+                    hold_from,
+                    asked,
+                    ..
+                } => *asked && *next + STINGER_LEAD >= *hold_from,
                 _ => false,
             };
         if leave_now {
@@ -379,6 +387,10 @@ pub fn encode(
     Ok(frames)
 }
 
+/// Frames before the action clip's hold that the phone keyframe is asked
+/// for (and accepted from): ~130 ms at 60 fps, about the round trip.
+const STINGER_LEAD: usize = 8;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,32 +607,49 @@ mod stinger_tests {
     #[test]
     fn stinger_plays_once_holds_and_returns_on_phone_keyframe() {
         let fr = |k: bool, b: u8| (k, Arc::new(vec![b]));
-        // 0..3 action (keyframe at 0), 3..5 hold (keyframe at 3)
-        let frames = Arc::new(vec![
-            fr(true, 0),
-            fr(false, 1),
-            fr(false, 2),
-            fr(true, 3),
-            fr(false, 4),
-        ]);
+        // 0..20 action (keyframe at 0), 20..24 hold (keyframe at 20)
+        let frames = Arc::new(
+            (0..24u8)
+                .map(|i| fr(i == 0 || i == 20, i))
+                .collect::<Vec<_>>(),
+        );
         let mut st = SceneState::Stinger {
             frames,
             next: 0,
-            hold_from: 3,
+            hold_from: 20,
             asked: false,
         };
         let p = |b: u8| Arc::new(vec![b]);
-        assert!(st.wants_keyframe()); // short clip: ask at once
-        assert!(!st.wants_keyframe());
-        // A phone keyframe during the action does not cut it short.
+        assert!(!st.wants_keyframe()); // not yet
+                                       // A phone keyframe during the action does not cut it short.
         assert_eq!(*st.substitute(true, p(9), b"C").1, vec![0]);
-        assert_eq!(*st.substitute(false, p(9), b"C").1, vec![1]);
-        assert_eq!(*st.substitute(false, p(9), b"C").1, vec![2]);
-        assert_eq!(*st.substitute(false, p(9), b"C").1, vec![3]);
-        assert_eq!(*st.substitute(false, p(9), b"C").1, vec![4]);
-        assert_eq!(*st.substitute(false, p(9), b"C").1, vec![3]); // hold loops
+        for i in 1..12u8 {
+            assert_eq!(*st.substitute(false, p(9), b"C").1, vec![i]);
+        }
+        assert!(st.wants_keyframe()); // 8 frames before the hold
+        assert!(!st.wants_keyframe());
+        for i in 12..24u8 {
+            assert_eq!(*st.substitute(false, p(9), b"C").1, vec![i]);
+        }
+        assert_eq!(*st.substitute(false, p(9), b"C").1, vec![20]); // hold loops
         let (k, d) = st.substitute(true, p(7), b"C");
         assert!(k && &d[..] == b"C\x07");
         assert!(matches!(st, SceneState::Off));
+
+        // A keyframe arriving a little before the hold is used, not missed.
+        let frames = Arc::new(
+            (0..24u8)
+                .map(|i| fr(i == 0 || i == 20, i))
+                .collect::<Vec<_>>(),
+        );
+        let mut st = SceneState::Stinger {
+            frames,
+            next: 15,
+            hold_from: 20,
+            asked: false,
+        };
+        assert!(st.wants_keyframe());
+        let (k, d) = st.substitute(true, p(5), b"C");
+        assert!(k && &d[..] == b"C\x05");
     }
 }

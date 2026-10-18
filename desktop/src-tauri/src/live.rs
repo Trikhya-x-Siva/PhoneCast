@@ -1008,6 +1008,21 @@ pub fn banner_frames_dir() -> Option<std::path::PathBuf> {
 /// else the saved still image, else a plain dark strip until one is made.
 /// One frame a second is plenty for a still image.
 fn banner_input() -> Vec<String> {
+    // Live-switchable: the app writes the banner (or the plain strip) into
+    // a local socket, so on/off and edits apply without a restart.
+    if let Some(port) = crate::banner_feed::start() {
+        return [
+            "-f",
+            "h264",
+            "-framerate",
+            "30",
+            "-i",
+            &format!("tcp://127.0.0.1:{port}"),
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    }
     if let Some(dir) = banner_frames_dir() {
         return ["-stream_loop", "-1", "-i"]
             .iter()

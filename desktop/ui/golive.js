@@ -341,7 +341,8 @@
   let savedKey = null;
   async function saveBannerNow() {
     const H = stripHeight();
-    const key = window.bannerDesignKey() + "@" + H;
+    const clip = (bn._clips || []).includes("gaming");
+    const key = window.bannerDesignKey() + "@" + H + (clip ? "+clip" : "");
     if (key === savedKey) return; // nothing changed: keep the made banner
     const off = document.createElement("canvas");
     off.width = canvas.width;
@@ -355,7 +356,7 @@
     await invoke("save_banner", first, { headers: { "x-spec": encodeURIComponent(JSON.stringify(spec)) } });
     // Moving banner: a 20 s loop (Subscribe pop-up in its last 4 s), drawn a
     // few frames at a time so the window stays responsive.
-    const n = BannerArt.animated(bn) ? BannerArt.BANNER_LOOP_SECONDS * BannerArt.FPS : 0;
+    const n = BannerArt.animated(bn) || clip ? BannerArt.BANNER_LOOP_SECONDS * BannerArt.FPS : 0;
     const frames = [];
     for (let i = 0; i < n; i++) {
       BannerArt.bannerAt(g, off.width, H, bn, i / BannerArt.FPS);
@@ -370,9 +371,15 @@
       at += f.length;
     }
     await invoke("save_banner_frames", body, {
-      headers: { "x-sizes": frames.map((f) => f.length).join(","), "x-fps": String(BannerArt.FPS) },
+      headers: { "x-sizes": frames.map((f) => f.length).join(","), "x-fps": String(BannerArt.FPS), "x-w": String(off.width), "x-h": String(H) },
     });
+    // The plain strip for "banner off" (same size, so the stream can switch).
+    const pg = off.getContext("2d");
+    pg.clearRect(0, 0, off.width, H);
+    BannerArt.plain(pg, off.width, H, bn);
+    await invoke("save_banner_plain", await toPng(off));
     savedKey = key;
+    if ($("qbState")) $("qbState").textContent = "";
   }
 
   function showBannerEditor() {
@@ -387,9 +394,34 @@
   for (const [id, key] of [["bnTitle", "title"], ["bnLine", "line"], ["bnRight", "right"], ["bnColor", "color"], ["bnColor2", "color2"]]) {
     $(id).addEventListener("input", (e) => {
       bn[key] = e.target.value;
+      syncQuickBanner();
       saveBannerSoon();
     });
   }
+  // Main screen Banner card: on/off and the texts, changeable any time
+  // (also while live: the stream picks the new banner up by itself).
+  function syncQuickBanner() {
+    for (const [id, key] of [["qbTitle", "title"], ["qbRight", "right"]]) {
+      const el = $(id);
+      if (el && document.activeElement !== el) el.value = bn[key] || "";
+    }
+  }
+  for (const [id, key, full] of [["qbTitle", "title", "bnTitle"], ["qbRight", "right", "bnRight"]]) {
+    $(id).addEventListener("input", (e) => {
+      bn[key] = e.target.value;
+      $(full).value = bn[key];
+      $("qbState").textContent = "Updating the banner…";
+      saveBannerSoon();
+    });
+  }
+  $("qbOn").addEventListener("change", (e) => {
+    invoke("set_banner_on", { on: e.target.checked }).catch((err) => toast(String(err)));
+  });
+  $("qbEdit").addEventListener("click", () => window.openModal());
+  window.renderQuickBanner = (s) => {
+    const t = $("qbOn");
+    if (document.activeElement !== t && typeof s.bannerOn === "boolean") t.checked = s.bannerOn;
+  };
   for (const [id, key] of [["bnLogo", "logo"], ["bnImage", "image"]]) {
     $(id).addEventListener("change", (e) => {
       const f = e.target.files[0];
@@ -430,6 +462,7 @@
     // by the app), so the drawn scene leaves room for it.
     bn._clips = s._clips || [];
     window.bannerReady = true;
+    syncQuickBanner();
     $("bnTitle").value = bn.title;
     $("bnLine").value = bn.line;
     $("bnRight").value = bn.right;

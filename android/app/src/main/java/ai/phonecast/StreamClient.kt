@@ -28,7 +28,7 @@ class StreamClient(
         fun onDisconnected()
         fun onCongestion()
         fun onSetBitrate(bps: Int)
-        fun onKeyframeRequest()
+        fun onKeyframeRequest(urgent: Boolean)
         fun onStopRequest()
         fun onSetMic(on: Boolean)
         fun onSetPrivacy(on: Boolean)
@@ -253,7 +253,8 @@ class StreamClient(
                     Protocol.SET_BITRATE -> listener.onSetBitrate(
                         java.nio.ByteBuffer.wrap(payload).int
                     )
-                    Protocol.REQUEST_KEYFRAME -> listener.onKeyframeRequest()
+                    Protocol.REQUEST_KEYFRAME ->
+                        listener.onKeyframeRequest(payload.isNotEmpty() && payload[0].toInt() != 0)
                     Protocol.PING -> {
                         val pcTime = java.nio.ByteBuffer.wrap(payload).long
                         val reply = java.nio.ByteBuffer.allocate(16)

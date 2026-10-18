@@ -204,6 +204,18 @@
         <p class="hint" id="replayHint">Clips are saved as MP4 in Videos\PhoneCast\Clips without re-encoding. The buffer lives in memory only.</p>
       </div>
 
+      <div class="card" id="quickBanner">
+        <h3>Banner</h3>
+        <label class="switch" style="margin:4px 0 8px" title="Turns the banner under the game on or off, also while live (no restart)">
+          <input type="checkbox" id="qbOn" checked><span class="track"><span class="knob"></span></span>Show the banner on stream
+        </label>
+        <label class="field"><span>Channel name</span><input id="qbTitle" type="text" maxlength="40" placeholder="PhantomBlitz"></label>
+        <label class="field"><span>Game label</span><input id="qbRight" type="text" maxlength="24" placeholder="BGMI LIVE"></label>
+        <p class="hint" id="qbState" style="margin:4px 0 0"></p>
+        <button class="btn ghost" id="qbEdit" style="margin-top:8px;width:100%">Edit banner design</button>
+        <p class="hint" style="margin:6px 0 0">Changes show on stream within a few seconds, while live too. Shown with the Game + banner picture.</p>
+      </div>
+
       <div id="liveCard" class="card live-card hidden">
         <h3>Live</h3>
         <div id="liveDests"></div>
