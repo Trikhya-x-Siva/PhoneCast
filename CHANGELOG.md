@@ -33,6 +33,11 @@ versions follow [SemVer](https://semver.org).
   Brave, Opera) as well as the Discord app, with a source picker.
 - Public roadmap, contributing guide and security policy.
 
+### Fixed
+- PC-mode recordings were nearly empty (no audio reached the recorder, so
+  FFmpeg never started writing). Stopping a window-capture recording or
+  stream now ends FFmpeg cleanly, so files are finished instead of cut off.
+
 ## [0.1.0] - 2026-10-17
 ### Added
 - Phone capture over USB or Wi-Fi with a frame pacer for steady 60 fps.

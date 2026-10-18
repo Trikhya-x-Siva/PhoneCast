@@ -905,6 +905,14 @@ impl Job {
             }
 
             let graceful = sender_gone || stop.load(Ordering::SeqCst);
+            if graceful {
+                // Composited video arrives on a pipe that never ends by
+                // itself; close it too so FFmpeg sees the end of both inputs
+                // and finishes the file instead of being killed mid-write.
+                if let Some(pc) = &self.pc {
+                    pc.close_input();
+                }
+            }
             finish(&mut child, writer.take(), graceful);
             if graceful {
                 break;
@@ -1170,6 +1178,215 @@ mod tests {
         let size = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
         println!("wrote {} ({} KB)", out.display(), size / 1024);
         assert!(size > 200_000);
+    }
+
+    /// End to end, composed PC picture: Notepad (Windows Graphics Capture)
+    /// with a PNG logo and text, through the compositor, into the recorder (MKV)
+    /// and a 1440p60 live job (a local FLV file stands in for YouTube) at
+    /// the same time. Checks both outputs with ffprobe: size, 60 fps, audio,
+    /// no lost frames, video starting at ~0.
+    /// `cargo test composed_record_and_live -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn composed_record_and_live() {
+        use crate::capture::{Overlay, OverlayKind, PcInput};
+        use crate::compositor::{Base, Layers, Session};
+        let ffmpeg = find_ffmpeg().expect("ffmpeg");
+        let enc = probe_encoders(&ffmpeg);
+        let mut np = Command::new("notepad.exe").spawn().expect("notepad");
+        let mut hwnd = 0isize;
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(100));
+            if let Some(w) = crate::capture::windows()
+                .into_iter()
+                .find(|w| w.process.eq_ignore_ascii_case("notepad.exe"))
+            {
+                hwnd = w.hwnd;
+                break;
+            }
+        }
+        assert_ne!(hwnd, 0, "Notepad window not found");
+        let logo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("icons/128x128.png");
+        let layers = Layers {
+            webcam: None,
+            overlays: vec![
+                Overlay {
+                    id: "logo".into(),
+                    kind: OverlayKind::Image {
+                        path: logo.display().to_string(),
+                    },
+                    x: 0.85,
+                    y: 0.04,
+                    w: 0.1,
+                    opacity: 1.0,
+                },
+                Overlay {
+                    id: "txt".into(),
+                    kind: OverlayKind::Text {
+                        text: "PhoneCast test".into(),
+                        size: 0.06,
+                        color: "#ffcc33".into(),
+                    },
+                    x: 0.04,
+                    y: 0.85,
+                    w: 0.0,
+                    opacity: 1.0,
+                },
+            ],
+        };
+        let (cw, ch) = (2560, 1440);
+        let session =
+            Session::start(Base::Window { hwnd }, (cw, ch), layers, None).expect("compositor");
+        // One pipe per job, as in the app (an unread pipe only counts drops).
+        let base = PcVideo {
+            input: PcInput::Composited {
+                session: session.clone(),
+                pipe: session.new_pipe(),
+            },
+            webcam: None,
+            screen_w: cw,
+            screen_h: ch,
+        };
+        let second = base.for_job();
+        let dir = std::env::temp_dir();
+        let mkv = dir.join("phonecast_composed.mkv");
+        let flv = dir.join("phonecast_composed.flv");
+        std::fs::remove_file(&mkv).ok();
+        std::fs::remove_file(&flv).ok();
+        let cfg = VideoConfig {
+            codec: crate::mkv::CODEC_H264,
+            width: cw as u16,
+            height: ch as u16,
+            csd: Vec::new(),
+        };
+        let p = preset(YOUTUBE, "1440p60");
+        let jobs = [
+            Job {
+                ffmpeg: ffmpeg.clone(),
+                url: mkv.display().to_string(),
+                encoder: enc.h264.clone(),
+                w: cw,
+                h: ch,
+                kbps: 0,
+                hevc: false,
+                framing: Framing::Fit,
+                pc: Some(Arc::new(base)),
+                file: true,
+            },
+            Job {
+                ffmpeg: ffmpeg.clone(),
+                url: flv.display().to_string(),
+                encoder: enc.h264.clone(),
+                w: p.w,
+                h: p.h,
+                kbps: p.kbps,
+                hevc: false,
+                framing: Framing::Fit,
+                pc: Some(Arc::new(second)),
+                file: false,
+            },
+        ];
+        let mut dests: Vec<Dest> = jobs
+            .into_iter()
+            .map(|j| spawn_job(j, cfg.clone(), Arc::new(|| {}), "Test"))
+            .collect();
+        // 8 s of 10 ms audio chunks (a 440 Hz tone) in real time.
+        let start = Instant::now();
+        for i in 0..800i64 {
+            let pcm: Vec<u8> = (0..480)
+                .flat_map(|k| {
+                    let t = (i * 480 + k) as f32 / 48000.0;
+                    let s = ((t * 440.0 * std::f32::consts::TAU).sin() * 8000.0) as i16;
+                    [s.to_le_bytes(), s.to_le_bytes()].concat()
+                })
+                .collect();
+            let m = Media::Audio {
+                pts: i * 10_000,
+                pcm: Arc::new(pcm),
+            };
+            for d in dests.iter_mut() {
+                d.tx.push(&m);
+            }
+            if let Some(w) = Duration::from_millis((i as u64 + 1) * 10).checked_sub(start.elapsed())
+            {
+                std::thread::sleep(w);
+            }
+        }
+        for d in &dests {
+            let s = d.status.lock().unwrap().clone();
+            println!("job state={} fps={} err={:?}", s.state, s.fps, s.error);
+            assert_eq!(s.state, "live", "job not live: {:?}", s.error);
+            d.stop.store(true, Ordering::SeqCst);
+        }
+        println!("compositor {}", session.status_json());
+        drop(dests);
+        std::thread::sleep(Duration::from_secs(3));
+        np.kill().ok();
+        np.wait().ok();
+
+        let ffprobe = ffmpeg.with_file_name("ffprobe.exe");
+        let probe = |file: &std::path::Path, args: &[&str]| -> String {
+            let out = Command::new(&ffprobe)
+                .args(["-v", "error", "-of", "csv=p=0"])
+                .args(args)
+                .arg(file)
+                .output()
+                .expect("ffprobe");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        for (file, w, h) in [(&mkv, cw, ch), (&flv, p.w, p.h)] {
+            let v = probe(
+                file,
+                &[
+                    "-select_streams",
+                    "v:0",
+                    "-count_packets",
+                    "-show_entries",
+                    "stream=width,height,avg_frame_rate,nb_read_packets",
+                ],
+            );
+            let a = probe(
+                file,
+                &[
+                    "-select_streams",
+                    "a:0",
+                    "-show_entries",
+                    "stream=codec_name",
+                ],
+            );
+            let dur: f64 = probe(file, &["-show_entries", "format=duration"])
+                .parse()
+                .unwrap_or(0.0);
+            let first = probe(
+                file,
+                &[
+                    "-select_streams",
+                    "v:0",
+                    "-read_intervals",
+                    "%+#1",
+                    "-show_entries",
+                    "packet=pts_time",
+                ],
+            );
+            println!(
+                "{}: video [{v}] audio [{a}] duration {dur:.2}s first video pts {first}",
+                file.display()
+            );
+            let f: Vec<&str> = v.split(',').collect();
+            assert_eq!(f[0].parse::<u32>().unwrap(), w, "width");
+            assert_eq!(f[1].parse::<u32>().unwrap(), h, "height");
+            assert_eq!(f[2], "60/1", "frame rate");
+            let packets: f64 = f[3].parse().unwrap();
+            assert!(!a.is_empty(), "no audio track");
+            assert!(dur > 6.0, "too short: {dur}");
+            let expect = dur * 60.0;
+            assert!(
+                packets >= expect * 0.97,
+                "lost frames: {packets} of ~{expect:.0}"
+            );
+            let first: f64 = first.parse().unwrap_or(9.9);
+            assert!(first < 0.2, "video starts late: {first}s");
+        }
     }
 
     /// End-to-end: live MKV over stdin → FFmpeg → GPU encode → FLV file

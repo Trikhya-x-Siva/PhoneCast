@@ -699,6 +699,11 @@ impl Core {
                 }
             }
         }
+        // PC-mode recording: FFmpeg captures the video itself but needs the
+        // mixed audio, without which it never starts writing the file.
+        if let Some(r) = self.pc_record.lock().unwrap().as_mut() {
+            r.dest.tx.push(&m);
+        }
         if self.live.push(&m) {
             want_key = true;
         }

@@ -427,6 +427,14 @@ impl PcVideo {
         v
     }
 
+    /// Ends the video input for this job (composited pipe only), so FFmpeg
+    /// can finish cleanly on stop. Plain ddagrab capture has no such end.
+    pub fn close_input(&self) {
+        if let PcInput::Composited { pipe, .. } = &self.input {
+            pipe.close();
+        }
+    }
+
     pub fn is_composited(&self) -> bool {
         matches!(self.input, PcInput::Composited { .. })
     }
