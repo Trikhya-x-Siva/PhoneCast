@@ -232,7 +232,7 @@ fn encoder_label(e: &str) -> &'static str {
     }
 }
 
-fn encoder_args(enc: &str, kbps: u32, hevc: bool, uhd: bool) -> Vec<String> {
+pub(crate) fn encoder_args(enc: &str, kbps: u32, hevc: bool, uhd: bool) -> Vec<String> {
     let b = format!("{kbps}k");
     let buf = format!("{}k", kbps * 2);
     let mut a: Vec<String> = vec!["-c:v".into(), enc.into()];
@@ -1022,7 +1022,7 @@ fn watch_progress(stderr: std::process::ChildStderr, status: Arc<Mutex<DestStatu
 /// background is made from a tiny 384×216 copy: download, blur and upload
 /// of a frame that small costs well under 1 ms. Measured on an RTX 4050 with a
 /// real 2376×1080 phone recording: 1440p blur at 2.2× real time.
-fn video_filter(
+pub(crate) fn video_filter(
     nvidia: bool,
     framing: Framing,
     w: u32,

@@ -7,6 +7,7 @@ mod audio;
 mod capture;
 mod core;
 mod diag;
+mod engine;
 mod live;
 mod mkv;
 mod sinks;
