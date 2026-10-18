@@ -247,6 +247,35 @@ produces H.264-shaped packets in real time against the fake ingest.
 | `queue_drops_never_touch_audio_or_keyframes` | The 700 / 900 ms drop rules. |
 | `rtmp::*`, `flv::*`, `amf::*` | Chunking with extended timestamps (parsed byte by byte), platform URLs, backoff schedule, avcC/hvcC, enhanced-RTMP tags, AAC config, FLV reader. |
 
+## Cost at 1440p60 (RTX 4050 laptop, i5-13450HX)
+
+Input: a real 2376×1080 H.264 phone recording, read in real time
+(`-readrate 1`, 20 s). Blur framing on CUDA, NVENC p5/hq/CBR with
+lookahead 20 and 2 B-frames, as in `encoder_args`. "v1" is today's shape:
+one FFmpeg process per destination. "v2" is the engine's shape: one
+decode, then shared or split graphs and encoders in one process. The
+libav backend does the same GPU work in-process. Two runs each; CPU is the
+total over all processes (16 logical cores).
+
+| Scenario | CPU (s per 20 s) | NVENC | NVDEC | GPU 3D |
+|---|---|---|---|---|
+| v1, 1 destination 1440p60 | 1.8–3.3 | 47–48 % | 7 % | 4–5 % |
+| v1, 2 destinations on the same 1440p60 preset | 5.2–5.4 | 67–68 % | 13 % | 9–10 % |
+| **v2, same 2 destinations (shared encoder)** | **1.5–1.8** | **44–47 %** | **7–10 %** | **5 %** |
+| v1, 1440p60 + 1080p60 | 3.5–7.0 | 50–56 % | 11 % | 7–8 % |
+| **v2, 1440p60 + 1080p60 (one decode)** | **2.4–3.2** | **49–54 %** | **5–6 %** | **7–8 %** |
+
+What this means:
+
+- CPU is small either way (under 2.2 % of the PC).
+- The real saving is GPU headroom for a second destination. A shared preset
+  costs one encoder session instead of two (NVENC −35 %), and the phone
+  stream is decoded once (NVDEC about halved).
+- Not measured in v1: piping MKV into each process and encoding AAC once per
+  process. v2 does both once.
+- v2 adds rustls encryption in-process: about 2–3 % of one core at
+  20 Mbps.
+
 ## Open risks
 
 - **`libav.rs` has never been compiled or run here.** This PC has no FFmpeg
