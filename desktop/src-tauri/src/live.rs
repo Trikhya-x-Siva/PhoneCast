@@ -840,6 +840,31 @@ impl Live {
         Ok(())
     }
 
+    /// Stops every destination and waits (up to `timeout`) until each has
+    /// signed off with its platform. Used when PhoneCast closes, so closing
+    /// the app ends the stream everywhere instead of leaving it hanging.
+    pub fn stop_and_wait(&self, timeout: Duration) {
+        let statuses: Vec<_> = self
+            .dests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|d| d.status.clone())
+            .collect();
+        if statuses.is_empty() {
+            return;
+        }
+        self.stop();
+        let until = Instant::now() + timeout;
+        while Instant::now() < until
+            && statuses
+                .iter()
+                .any(|s| s.lock().unwrap().state != "stopped")
+        {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     pub fn stop(&self) {
         let mut dests = self.dests.lock().unwrap();
         for d in dests.iter() {
@@ -933,9 +958,33 @@ pub fn banner_path() -> std::path::PathBuf {
         .join("banner.png")
 }
 
-/// FFmpeg input for the banner strip: the saved image, or a plain dark strip
-/// until one is made. One frame a second is plenty for a still image.
+/// Folder holding all saved versions of the moving banner.
+pub fn banner_frames_root() -> std::path::PathBuf {
+    banner_path().with_file_name("banner_frames")
+}
+
+/// Frames of the current moving banner (000.png, 001.png, ... a 2 s loop at
+/// 30 fps), or None for a still banner. Each save goes to a new numbered
+/// folder named in `current.txt`, so a running stream keeps reading the
+/// version it started with while the banner is being edited.
+pub fn banner_frames_dir() -> Option<std::path::PathBuf> {
+    let root = banner_frames_root();
+    let name = std::fs::read_to_string(root.join("current.txt")).ok()?;
+    let dir = root.join(name.trim());
+    (!name.trim().is_empty() && dir.join("000.png").exists()).then_some(dir)
+}
+
+/// FFmpeg input for the banner strip: the moving loop (repeated forever),
+/// else the saved still image, else a plain dark strip until one is made.
+/// One frame a second is plenty for a still image.
 fn banner_input() -> Vec<String> {
+    if let Some(frames) = banner_frames_dir() {
+        return ["-framerate", "30", "-loop", "1", "-i"]
+            .iter()
+            .map(|s| s.to_string())
+            .chain([frames.join("%03d.png").to_string_lossy().into_owned()])
+            .collect();
+    }
     let p = banner_path();
     if p.exists() {
         ["-loop", "1", "-framerate", "1", "-i"]
@@ -1357,8 +1406,16 @@ impl Job {
                     pc.close_input();
                 }
             }
-            finish(&mut child, writer.take(), graceful);
+            let clean = finish(&mut child, writer.take(), graceful);
             if graceful {
+                crate::diag::log(
+                    "live",
+                    if clean {
+                        format!("{name}: ended cleanly - the platform was told the stream is over")
+                    } else {
+                        format!("{name}: had to be cut off - the platform may wait a while before ending the stream")
+                    },
+                );
                 break;
             }
             if restart_for_config {
@@ -1401,8 +1458,13 @@ enum Feed {
     Pcm(BufWriter<std::process::ChildStdin>),
 }
 
-/// Ends FFmpeg: closing stdin lets it flush and disconnect cleanly.
-fn finish(child: &mut Child, w: Option<Feed>, graceful: bool) {
+/// Ends FFmpeg: closing stdin lets it flush and disconnect cleanly. A clean
+/// exit sends RTMP's "unpublish" + "delete stream", which is how YouTube
+/// (with Auto-stop on), Twitch, Kick and Facebook learn the stream is over
+/// and end it right away. Being killed instead looks like a dropped
+/// connection, and the platform keeps the stream open, waiting for a
+/// reconnect. Returns true when FFmpeg exited by itself.
+fn finish(child: &mut Child, w: Option<Feed>, graceful: bool) -> bool {
     match w {
         Some(Feed::Mkv(w)) => {
             w.end().ok();
@@ -1414,15 +1476,16 @@ fn finish(child: &mut Child, w: Option<Feed>, graceful: bool) {
         }
         None => {}
     }
-    let deadline = Instant::now() + Duration::from_secs(if graceful { 5 } else { 1 });
+    let deadline = Instant::now() + Duration::from_secs(if graceful { 12 } else { 1 });
     while Instant::now() < deadline {
         if child.try_wait().ok().flatten().is_some() {
-            return;
+            return true;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     child.kill().ok();
     child.wait().ok();
+    false
 }
 
 /// Parses FFmpeg's output: `-progress` key=value lines become live stats,

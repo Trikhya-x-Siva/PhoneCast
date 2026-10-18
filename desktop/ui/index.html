@@ -336,10 +336,11 @@
       <div id="bannerEditor" class="banner-editor hidden">
         <canvas id="bannerCanvas" width="1920" height="208" aria-label="Banner preview"></canvas>
         <div class="banner-fields">
+          <label class="field"><span>Style</span><select id="bnStyle"><option value="blitz">Blitz · electric</option><option value="clean">Clean</option></select></label>
           <label class="field"><span>Channel name</span><input id="bnTitle" maxlength="40" placeholder="Your channel name"></label>
           <label class="field"><span>Second line</span><input id="bnLine" maxlength="80" placeholder="YT · IG · Discord: @yourname"></label>
-          <label class="field"><span>Right side</span><input id="bnRight" maxlength="30" placeholder="e.g. BGMI LIVE"></label>
-          <label class="field bn-color"><span>Colour</span><input id="bnColor" type="color" value="#8b6cff"></label>
+          <label class="field"><span>Game (change it per stream)</span><input id="bnRight" maxlength="30" placeholder="e.g. BGMI LIVE"></label>
+          <label class="field bn-color"><span>Colours</span><span class="bn-colors"><input id="bnColor" type="color" value="#8b5cf6"><input id="bnColor2" type="color" value="#22d3ee"></span></label>
           <label class="field"><span>Logo (optional)</span><input id="bnLogo" type="file" accept="image/png,image/jpeg,image/webp"></label>
           <label class="field"><span>Or your own banner image</span><input id="bnImage" type="file" accept="image/png,image/jpeg,image/webp"></label>
         </div>
@@ -408,6 +409,7 @@
 
   <div id="toast" class="toast"></div>
   <script src="app.js"></script>
+  <script src="banner.js"></script>
   <script src="golive.js"></script>
   <script src="ai.js"></script>
 </body>

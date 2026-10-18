@@ -211,6 +211,7 @@
     for (const x of $("framing").querySelectorAll("button")) x.classList.toggle("on", x.dataset.v === framing);
     $("bannerEditor").classList.toggle("hidden", framing !== "banner");
     drawBanner();
+    startPreview();
     render();
     scheduleCheck();
   }
@@ -259,7 +260,7 @@
   // ---------------- banner (strip under the game) ----------------
   // Drawn here on a 1920-wide canvas in the strip's exact shape, saved as a
   // PNG that the stream lays under the game. Re-saved shortly after each edit.
-  const bn = { title: "", line: "", right: "LIVE", color: "#8b6cff", logo: null, image: null };
+  const bn = { style: "blitz", title: "", line: "", right: "BGMI LIVE", color: "#8b5cf6", color2: "#22d3ee", logo: null, image: null };
   let bnSaveTimer;
   const canvas = $("bannerCanvas");
 
@@ -281,80 +282,70 @@
     });
   }
 
-  function drawBanner() {
+
+  // Draws one moment of the banner (t = 0..1 through the loop).
+  function drawBanner(t = 0) {
     const H = stripHeight();
     if (canvas.height !== H) canvas.height = H;
-    const g = canvas.getContext("2d");
-    const W = canvas.width;
-    g.clearRect(0, 0, W, H);
-    if (bn.image) {
-      // Own image: cover the strip, centred.
-      const s = Math.max(W / bn.image.width, H / bn.image.height);
-      const iw = bn.image.width * s, ih = bn.image.height * s;
-      g.drawImage(bn.image, (W - iw) / 2, (H - ih) / 2, iw, ih);
-      return;
-    }
-    const bg = g.createLinearGradient(0, 0, W, H);
-    bg.addColorStop(0, "#0d0f17");
-    bg.addColorStop(1, "#171b28");
-    g.fillStyle = bg;
-    g.fillRect(0, 0, W, H);
-    // Accent glow, and a top edge line that separates game and banner.
-    const glow = g.createRadialGradient(W * 0.18, H, 0, W * 0.18, H, W * 0.5);
-    glow.addColorStop(0, bn.color + "55");
-    glow.addColorStop(1, bn.color + "00");
-    g.fillStyle = glow;
-    g.fillRect(0, 0, W, H);
-    g.fillStyle = bn.color;
-    g.fillRect(0, 0, W, 4);
-    const pad = Math.round(H * 0.22);
-    let x = pad;
-    if (bn.logo) {
-      const d = H - pad * 2;
-      g.save();
-      g.beginPath();
-      g.arc(x + d / 2, H / 2 + 2, d / 2, 0, Math.PI * 2);
-      g.clip();
-      g.drawImage(bn.logo, x, H / 2 + 2 - d / 2, d, d);
-      g.restore();
-      g.strokeStyle = bn.color;
-      g.lineWidth = 4;
-      g.beginPath();
-      g.arc(x + d / 2, H / 2 + 2, d / 2, 0, Math.PI * 2);
-      g.stroke();
-      x += d + pad * 0.8;
-    }
-    g.textBaseline = "alphabetic";
-    g.fillStyle = "#f3f4fa";
-    g.font = `800 ${Math.round(H * 0.34)}px "Segoe UI", system-ui, sans-serif`;
-    g.fillText(bn.title || "Your channel name", x, H * 0.52);
-    g.fillStyle = "#aab0c4";
-    g.font = `600 ${Math.round(H * 0.18)}px "Segoe UI", system-ui, sans-serif`;
-    g.fillText(bn.line || "YT · IG · Discord: @yourname", x, H * 0.8);
-    if (bn.right) {
-      g.font = `800 ${Math.round(H * 0.2)}px "Segoe UI", system-ui, sans-serif`;
-      const tw = g.measureText(bn.right).width;
-      const ph = H * 0.36, pw = tw + ph * 1.1, px = W - pad - pw, py = H / 2 - ph / 2 + 2;
-      g.fillStyle = bn.color;
-      g.beginPath();
-      g.roundRect(px, py, pw, ph, ph / 2);
-      g.fill();
-      g.fillStyle = "#fff";
-      g.fillText(bn.right, px + (pw - tw) / 2, py + ph * 0.7);
-    }
+    BannerArt.draw(canvas.getContext("2d"), canvas.width, H, bn, t);
   }
 
+  // Live moving preview while the editor is open.
+  let previewRaf = 0;
+  function preview(now) {
+    if ($("bannerEditor").classList.contains("hidden") || modal.classList.contains("hidden")) {
+      previewRaf = 0;
+      return;
+    }
+    drawBanner(((now / 1000) % BannerArt.LOOP_SECONDS) / BannerArt.LOOP_SECONDS);
+    previewRaf = requestAnimationFrame(preview);
+  }
+  function startPreview() {
+    if (!previewRaf) previewRaf = requestAnimationFrame(preview);
+  }
+
+  function toPng(c) {
+    return new Promise((ok) => c.toBlob(async (b) => ok(new Uint8Array(await b.arrayBuffer())), "image/png"));
+  }
+
+  // Saves the banner: the first frame as banner.png (plus the editor
+  // settings), and for a moving banner every frame of the loop, which the
+  // stream plays under the game.
+  let saving = Promise.resolve();
   function saveBannerSoon() {
     drawBanner();
+    startPreview();
     clearTimeout(bnSaveTimer);
     bnSaveTimer = setTimeout(() => {
-      canvas.toBlob(async (blob) => {
-        if (!blob) return;
-        const png = Array.from(new Uint8Array(await blob.arrayBuffer()));
-        const spec = { title: bn.title, line: bn.line, right: bn.right, color: bn.color, logo: bn.logo ? bn.logo.src : null, image: bn.image ? bn.image.src : null };
-        invoke("save_banner", { png, spec }).catch((e) => toast(String(e)));
-      }, "image/png");
-    }, 400);
+      saving = saving.then(saveBannerNow).catch((e) => toast(String(e)));
+    }, 800);
+  }
+  async function saveBannerNow() {
+    const H = stripHeight();
+    const off = document.createElement("canvas");
+    off.width = canvas.width;
+    off.height = H;
+    const g = off.getContext("2d");
+    const spec = { style: bn.style, title: bn.title, line: bn.line, right: bn.right, color: bn.color, color2: bn.color2, logo: bn.logo ? bn.logo.src : null, image: bn.image ? bn.image.src : null };
+    BannerArt.draw(g, off.width, H, bn, 0);
+    const first = await toPng(off);
+    await invoke("save_banner", { png: Array.from(first), spec });
+    const n = BannerArt.animated(bn) ? BannerArt.LOOP_SECONDS * BannerArt.FPS : 0;
+    const frames = [];
+    for (let i = 0; i < n; i++) {
+      BannerArt.draw(g, off.width, H, bn, i / n);
+      frames.push(await toPng(off));
+    }
+    const total = frames.reduce((a, f) => a + f.length, 0);
+    const body = new Uint8Array(total);
+    let at = 0;
+    for (const f of frames) {
+      body.set(f, at);
+      at += f.length;
+    }
+    await invoke("save_banner_frames", body, {
+      headers: { "x-sizes": frames.map((f) => f.length).join(","), "x-fps": String(BannerArt.FPS) },
+    });
   }
 
   function showBannerEditor() {
@@ -362,7 +353,11 @@
     if (framing === "banner") saveBannerSoon();
   }
 
-  for (const [id, key] of [["bnTitle", "title"], ["bnLine", "line"], ["bnRight", "right"], ["bnColor", "color"]]) {
+  $("bnStyle").addEventListener("change", (e) => {
+    bn.style = e.target.value;
+    saveBannerSoon();
+  });
+  for (const [id, key] of [["bnTitle", "title"], ["bnLine", "line"], ["bnRight", "right"], ["bnColor", "color"], ["bnColor2", "color2"]]) {
     $(id).addEventListener("input", (e) => {
       bn[key] = e.target.value;
       saveBannerSoon();
@@ -387,14 +382,18 @@
 
   invoke("get_banner").then(async (s) => {
     if (!s) return drawBanner();
-    Object.assign(bn, { title: s.title || "", line: s.line || "", right: s.right ?? "LIVE", color: s.color || "#8b6cff" });
+    Object.assign(bn, { style: s.style || "blitz", title: s.title || "", line: s.line || "", right: s.right ?? "BGMI LIVE", color: s.color || "#8b5cf6", color2: s.color2 || "#22d3ee" });
     if (s.logo) bn.logo = await loadImage(s.logo).catch(() => null);
     if (s.image) bn.image = await loadImage(s.image).catch(() => null);
     $("bnTitle").value = bn.title;
     $("bnLine").value = bn.line;
     $("bnRight").value = bn.right;
     $("bnColor").value = bn.color;
-    drawBanner();
+    $("bnColor2").value = bn.color2;
+    $("bnStyle").value = bn.style;
+    // Re-save once on start, so the stream always has this banner even if
+    // the editor was never opened (e.g. settings prepared in advance).
+    saveBannerSoon();
   });
 
   window.openModal = () => {

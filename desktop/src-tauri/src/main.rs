@@ -110,6 +110,84 @@ fn save_banner(png: Vec<u8>, spec: serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Saves the frames of a moving banner (PNG files back to back in the body,
+/// their sizes in the `x-sizes` header). No frames = a still banner.
+#[tauri::command]
+fn save_banner_frames(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
+        return Err("expected raw frame data".into());
+    };
+    let sizes: Vec<usize> = request
+        .headers()
+        .get("x-sizes")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse().map_err(|_| "bad frame size".to_string()))
+        .collect::<Result<_, _>>()?;
+    if sizes.iter().sum::<usize>() != body.len() || sizes.len() > 600 {
+        return Err("frame data does not match its sizes".into());
+    }
+    let root = live::banner_frames_root();
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let set_current = |name: &str| -> Result<(), String> {
+        let tmp = root.join("current.tmp");
+        std::fs::write(&tmp, name).map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, root.join("current.txt")).map_err(|e| e.to_string())
+    };
+    // Older versions: keep the newest few (a running stream may still be
+    // reading one), delete the rest.
+    let prune = |keep: &str| {
+        let mut old: Vec<_> = std::fs::read_dir(&root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_dir() && e.file_name() != keep)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        old.sort();
+        let n = old.len().saturating_sub(2);
+        for name in &old[..n] {
+            std::fs::remove_dir_all(root.join(name)).ok();
+        }
+    };
+    if sizes.is_empty() {
+        set_current("")?;
+        prune("");
+        return Ok(());
+    }
+    let name = format!(
+        "v{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let dir = root.join(&name);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let mut at = 0;
+    for (i, n) in sizes.iter().enumerate() {
+        let f = &body[at..at + n];
+        if !f.starts_with(&[0x89, b'P', b'N', b'G']) {
+            return Err("frame is not a PNG".into());
+        }
+        std::fs::write(dir.join(format!("{i:03}.png")), f).map_err(|e| e.to_string())?;
+        at += n;
+    }
+    set_current(&name)?;
+    prune(&name);
+    diag::log(
+        "live",
+        format!(
+            "moving banner saved: {} frames, {} KB",
+            sizes.len(),
+            body.len() / 1024
+        ),
+    );
+    Ok(())
+}
+
 /// The banner editor's last settings (or null).
 #[tauri::command]
 fn get_banner() -> serde_json::Value {
@@ -418,6 +496,7 @@ fn main() {
             set_replay_seconds,
             set_game_mode,
             save_banner,
+            save_banner_frames,
             get_banner,
             set_clip_look,
             open_clips,
@@ -430,6 +509,8 @@ fn main() {
             // Closing PhoneCast puts the phone's screen size back.
             if let tauri::RunEvent::Exit = event {
                 if let Some(core) = app.try_state::<Arc<Core>>() {
+                    // Closing PhoneCast ends the stream on every platform.
+                    core.live.stop_and_wait(std::time::Duration::from_secs(12));
                     core.gamemode.restore();
                 }
             }

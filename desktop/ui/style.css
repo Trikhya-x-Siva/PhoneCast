@@ -470,3 +470,5 @@ dd { margin: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; wh
 .banner-fields input[type=file] { color: var(--muted); font-size: 12px; max-width: 100%; }
 .bn-color input { width: 54px; height: 34px; border: 0; padding: 0; background: none; cursor: pointer; }
 @media (max-width: 640px) { .banner-fields { grid-template-columns: 1fr; } }
+.bn-colors { display: flex; gap: 8px; }
+.banner-fields select { width: 100%; padding: 9px 11px; border-radius: 10px; background: rgba(0,0,0,.3); border: 1px solid var(--line); color: var(--text); font: inherit; }
