@@ -1865,7 +1865,7 @@ mod tests {
                 .spawn()
                 .unwrap()
         };
-        let mut l1 = listen("phonecast_rtmp_1.flv");
+        let mut l1 = Some(listen("phonecast_rtmp_1.flv"));
         std::thread::sleep(Duration::from_millis(1500));
         let preset = *Platform::Twitch.preset("tw-720p60");
         let job = Job {
@@ -1910,8 +1910,10 @@ mod tests {
             }
             let t = start.elapsed().as_secs_f64();
             if i == 60 * 6 {
-                l1.kill().ok();
-                l1.wait().ok();
+                if let Some(mut l) = l1.take() {
+                    l.kill().ok();
+                    l.wait().ok();
+                }
                 println!("{t:5.1}s server killed");
             }
             if i == 60 * 10 {

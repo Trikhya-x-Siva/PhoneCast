@@ -1306,6 +1306,28 @@ mod tests {
         assert_eq!(recommend(Platform::Kick, 3.0, false).id, "kick-720p60");
     }
 
+    /// Writes UI fixtures (catalog + a sample plan) for the browser mock.
+    /// `PHONECAST_FIXTURE=<dir> cargo test dump_ui_fixture -- --ignored`
+    #[test]
+    #[ignore]
+    fn dump_ui_fixture() {
+        let dir = std::path::PathBuf::from(std::env::var("PHONECAST_FIXTURE").unwrap());
+        let mut tw = d("tw", Platform::Twitch, "tw-1080p60", false);
+        tw.has_key = false;
+        let dests = [
+            d("yt", Platform::Youtube, "yt-1440p60-hevc", true),
+            tw,
+            d("kick", Platform::Kick, "kick-1080p60", false),
+        ];
+        let plan = plan(&dests, Some(38.0), true);
+        let v = json!({ "catalog": catalog_json(true), "plan": plan });
+        std::fs::write(
+            dir.join("fixture.json"),
+            serde_json::to_vec_pretty(&v).unwrap(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn catalog_hides_hevc_when_unsupported() {
         let c = catalog_json(false);

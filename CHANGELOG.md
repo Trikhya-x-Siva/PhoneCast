@@ -5,6 +5,27 @@ versions follow [SemVer](https://semver.org).
 
 ## [Unreleased]
 ### Added
+- **Platform presets** for YouTube, Twitch, Kick, Facebook Gaming and any
+  RTMP/RTMPS/SRT server, built from each platform's official ingest specs
+  (codec, size, CBR bitrate, 2 s keyframes, B-frames, profile/level, AAC).
+  YouTube presets sit at or above YouTube's recommended bitrate.
+- **Pre-flight check** before going live: every setting is checked against
+  the platform's limits, the server URL and the key, and the total against
+  the measured upload with 30% spare. When the upload is short, the
+  platforms not marked **Main** are lowered first.
+- **Go live window**: add or remove platforms, star the Main one, pick a
+  preset with its limits shown, live messages while you edit.
+- **Setup check** (first run, re-runnable): encoder detection, one-click
+  FFmpeg install with checksum, a 10-second upload test that plans with the
+  slowest moment, recommended quality per platform, YouTube Studio tips.
+### Changed
+- Streams go through FFmpeg's fifo muxer: a network drop reconnects inside
+  FFmpeg within seconds, without restarting the encoder.
+- NVENC: two-pass (quarter resolution), B-frames as references, fixed
+  keyframes (no scene-cut keyframes), short lookahead, 1 s CBR buffer.
+### Fixed
+- Blurred-background framing on NVIDIA sent 1920x1088 instead of 1080p
+  (and 1280x736 for 720p).
 - **Local AI tools (optional, off by default)** in a separate, crash-isolated
   helper process (`phonecast-ai-helper`, CPU only): auto highlight clips
   from game loudness, your voice and chat speed (with an optional 15 MB
