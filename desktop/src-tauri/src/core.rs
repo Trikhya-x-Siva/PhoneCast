@@ -596,19 +596,28 @@ impl Core {
                     .lock()
                     .unwrap()
                     .is_none_or(|t| t.elapsed() > Duration::from_millis(300));
-                let mut sc = self.scene.lock().unwrap();
-                if matches!(*sc, crate::scenes::SceneState::Off)
-                    || !phone_quiet
-                    || self.is_pc_mode()
-                {
-                    announced = false;
-                    continue;
-                }
-                if !self.has_outputs() {
-                    continue;
-                }
-                let (key, data) = sc.substitute(false, Arc::new(Vec::new()), &[]);
-                drop(sc);
+                // No other lock may be taken while `scene` is held (the status
+                // thread holds `inner` and then reads the scene: deadlock).
+                let pc = self.is_pc_mode();
+                let outputs = self.has_outputs();
+                let frame = {
+                    let mut sc = self.scene.lock().unwrap();
+                    if matches!(*sc, crate::scenes::SceneState::Off) || !phone_quiet || pc {
+                        None
+                    } else if !outputs {
+                        Some(None)
+                    } else {
+                        Some(Some(sc.substitute(false, Arc::new(Vec::new()), &[])))
+                    }
+                };
+                let (key, data) = match frame {
+                    None => {
+                        announced = false;
+                        continue;
+                    }
+                    Some(None) => continue,
+                    Some(Some(f)) => f,
+                };
                 if !announced {
                     let cfg = self.inner.lock().unwrap().phone_video.clone();
                     if let Some(cfg) = cfg.or_else(|| self.scene_cfg.lock().unwrap().clone()) {
@@ -800,6 +809,8 @@ impl Core {
                     height: u16::from_be_bytes([payload[3], payload[4]]),
                     csd: payload[5..].to_vec(),
                 };
+                let scene_on =
+                    !matches!(*self.scene.lock().unwrap(), crate::scenes::SceneState::Off);
                 {
                     let mut i = self.inner.lock().unwrap();
                     if i.phone_video.as_ref() != Some(&cfg) {
@@ -811,8 +822,6 @@ impl Core {
                             ),
                         );
                     }
-                    let scene_on =
-                        !matches!(*self.scene.lock().unwrap(), crate::scenes::SceneState::Off);
                     i.phone_video = Some(cfg.clone());
                     if scene_on && !self.is_pc_mode() {
                         // The scene keeps the stream; the phone's setup goes
@@ -853,37 +862,44 @@ impl Core {
                 self.broadcast(ty, flags, pts, &payload);
                 *self.last_phone_frame.lock().unwrap() = Some(Instant::now());
                 let pts = self.to_pc_clock(pts);
-                let (key, data) = {
+                let scene_on =
+                    !matches!(*self.scene.lock().unwrap(), crate::scenes::SceneState::Off);
+                let csd = if scene_on {
+                    self.inner
+                        .lock()
+                        .unwrap()
+                        .phone_video
+                        .as_ref()
+                        .map(|v| v.csd.clone())
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                // Only the frame choice happens under the `scene` lock; the
+                // follow-up (keyframe ask, audio, the phone's setup) after it.
+                let (frame, back, ask) = {
                     let mut sc = self.scene.lock().unwrap();
                     if matches!(*sc, crate::scenes::SceneState::Off) {
-                        (key, Arc::new(payload))
+                        ((key, Arc::new(payload)), false, false)
                     } else {
-                        let csd = self
-                            .inner
-                            .lock()
-                            .unwrap()
-                            .phone_video
-                            .as_ref()
-                            .map(|v| v.csd.clone())
-                            .unwrap_or_default();
                         let f = sc.substitute(key, Arc::new(payload), &csd);
                         let back = matches!(*sc, crate::scenes::SceneState::Off);
-                        if sc.wants_keyframe() {
-                            drop(sc);
-                            self.request_keyframe();
-                        }
-                        if back {
-                            self.mixer.set_scene_audio(false);
-                            if std::mem::take(&mut *self.pending_phone_cfg.lock().unwrap()) {
-                                let cfg = self.inner.lock().unwrap().phone_video.clone();
-                                if let Some(cfg) = cfg {
-                                    self.dispatch(Media::Config(cfg));
-                                }
-                            }
-                        }
-                        f
+                        (f, back, sc.wants_keyframe())
                     }
                 };
+                if ask {
+                    self.request_keyframe();
+                }
+                if back {
+                    self.mixer.set_scene_audio(false);
+                    if std::mem::take(&mut *self.pending_phone_cfg.lock().unwrap()) {
+                        let cfg = self.inner.lock().unwrap().phone_video.clone();
+                        if let Some(cfg) = cfg {
+                            self.dispatch(Media::Config(cfg));
+                        }
+                    }
+                }
+                let (key, data) = frame;
                 self.dispatch(Media::Video { pts, key, data });
             }
             AUDIO_CONFIG if payload.len() >= 6 => {
@@ -1318,7 +1334,10 @@ impl Core {
 
             let secs = last.elapsed().as_secs_f64();
             last = Instant::now();
-            let status = {
+            // Lock rule: never hold `inner` while taking `scene` (or the
+            // reverse). The scene is read first, on its own.
+            let scene_name = self.scene.lock().unwrap().name().map(str::to_string);
+            let mut status = {
                 let mut i = self.inner.lock().unwrap();
                 i.fps = (i.frames as f64 / secs).round() as u64;
                 i.mbps = i.bytes as f64 * 8.0 / secs / 1e6;
@@ -1330,6 +1349,7 @@ impl Core {
                 i.latency_n = 0;
                 self.status_json(&mut i)
             };
+            status["scene"] = json!(scene_name);
             app.emit("status", status).ok();
         }
     }
@@ -1392,7 +1412,6 @@ impl Core {
             "live": self.live.status_json(),
             "adb": adb,
             "replay": replay,
-            "scene": self.scene.lock().unwrap().name(),
             "sceneMusic": self.mixer.has_scene_music(),
             "gameMode": json!({
                 "enabled": self.prefs.lock().unwrap().game_16x9,
