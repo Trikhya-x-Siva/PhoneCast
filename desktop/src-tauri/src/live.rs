@@ -1199,6 +1199,10 @@ impl Job {
                 // No "+nobuffer": with it, FFmpeg decoded the first frames before
                 // their reference pictures arrived ("Missing reference picture"),
                 // dropping ~1 s and glitching every stream start.
+                // Same size, different codec details (scene <-> phone): keep
+                // the GPU filter graph; rebuilding it mid-stream fails.
+                "-reinit_filter",
+                "0",
                 "-fflags",
                 "+genpts",
                 "-analyzeduration",
@@ -1407,9 +1411,12 @@ impl Job {
                     (Media::Config(c), Feed::Mkv(_)) => {
                         if !c.same_shape(&config) {
                             // Rotation: the stream must restart at the new size.
-                            config = c.clone();
                             restart_for_config = true;
                         }
+                        // Always keep the newest setup: a restart after a
+                        // scene must announce the phone's SPS/PPS, not the
+                        // scene's, or every frame fails to decode.
+                        config = c.clone();
                         true
                     }
                     (Media::Video { pts, key, data }, Feed::Mkv(w)) => {

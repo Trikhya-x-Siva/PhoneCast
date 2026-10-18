@@ -203,7 +203,14 @@ pub fn encode(
         std::fs::write(dir.join(format!("{i:03}.jpg")), j).map_err(|e| e.to_string())?;
     }
     let out = scenes_dir().join(format!("{tag}.{}", if hevc { "hevc" } else { "h264" }));
-    let vf = format!("scale={w}:{h}:flags=lanczos,fps=60,format=yuv420p");
+    // Exactly the phone's colour setup (TV range, BT.709, yuv420p): the JPEG
+    // frames are full range, and a range/matrix change between scene and
+    // phone made FFmpeg rebuild its GPU filter graph mid-stream, which fails
+    // ("Impossible to convert between the formats ... Error reinitializing
+    // filters!") and dropped the stream on "Back to game".
+    let vf = format!(
+        "scale={w}:{h}:flags=lanczos:in_range=full:out_range=tv:out_color_matrix=bt709,fps=60,format=yuv420p"
+    );
     let attempts: [&[&str]; 2] = if hevc {
         [
             &[
@@ -313,6 +320,16 @@ pub fn encode(
         if let Some(t) = keyframe_at {
             cmd.args(["-force_key_frames", &format!("0,{t:.3}")]);
         }
+        cmd.args([
+            "-color_range",
+            "tv",
+            "-colorspace",
+            "bt709",
+            "-color_primaries",
+            "bt709",
+            "-color_trc",
+            "bt709",
+        ]);
         cmd.arg(&out);
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000);
@@ -434,6 +451,15 @@ mod decode_tests {
                 "120",
                 "-aud",
                 "1",
+                // Tagged like the real phone (TV range, BT.709).
+                "-color_range",
+                "tv",
+                "-colorspace",
+                "bt709",
+                "-color_primaries",
+                "bt709",
+                "-color_trc",
+                "bt709",
                 "-f",
                 "h264",
             ])

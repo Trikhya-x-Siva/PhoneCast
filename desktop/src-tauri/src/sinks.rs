@@ -100,6 +100,11 @@ pub fn spawn_recorder(
             while let Ok(m) = rx.recv() {
                 let Some(w) = writer.as_mut() else { continue };
                 let res = match &m {
+                    Media::Config(c) if c.same_shape(&cfg) => {
+                        // Newest setup for the next file part (no new part).
+                        cfg = c.clone();
+                        Ok(())
+                    }
                     Media::Config(c) if !c.same_shape(&cfg) => {
                         part += 1;
                         cfg = c.clone();
