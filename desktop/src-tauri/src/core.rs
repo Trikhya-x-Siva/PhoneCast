@@ -7,7 +7,8 @@
 
 use crate::adb::{self, AdbState};
 use crate::audio::{self, Mixer};
-use crate::capture::{PcVideo, ScreenPreview, Source, SourceSettings};
+use crate::capture::{self, PcInput, PcVideo, ScreenPreview, Source, SourceSettings};
+use crate::compositor::{layout, Base, Session};
 use crate::diag;
 use crate::live::{self, Live};
 use crate::mkv::VideoConfig;
@@ -103,6 +104,10 @@ pub struct Core {
     pub live: Arc<Live>,
     pub preview_port: Mutex<u16>,
     source: Mutex<SourceSettings>,
+    /// Running window/overlay compositor, when the source needs one.
+    session: Mutex<Option<Arc<Session>>>,
+    /// Why the current source could not start (shown in the Source panel).
+    source_error: Mutex<Option<String>>,
     screen_preview: Mutex<Option<ScreenPreview>>,
     pc_record: Mutex<Option<PcRecord>>,
     sources_cache: Mutex<Value>,
@@ -120,6 +125,8 @@ impl Core {
             live: Live::new(),
             preview_port: Mutex::new(0),
             source: Mutex::new(SourceSettings::load()),
+            session: Mutex::new(None),
+            source_error: Mutex::new(None),
             screen_preview: Mutex::new(None),
             pc_record: Mutex::new(None),
             sources_cache: Mutex::new(Value::Null),
@@ -198,10 +205,22 @@ impl Core {
     }
 
     pub fn set_source(self: &Arc<Self>, s: SourceSettings) -> Result<(), String> {
-        if self.live.is_live()
+        let busy = self.live.is_live()
             || self.pc_record.lock().unwrap().is_some()
-            || self.inner.lock().unwrap().recording.is_some()
-        {
+            || self.inner.lock().unwrap().recording.is_some();
+        let cur = self.source.lock().unwrap().clone();
+        let same_base = cur.source == s.source && cur.needs_compositor() == s.needs_compositor();
+        let session = self.session.lock().unwrap().clone();
+        if same_base {
+            if let Some(sess) = session {
+                // Overlays and webcam change live, even while streaming.
+                sess.set_layers(s.layers());
+                s.save();
+                *self.source.lock().unwrap() = s;
+                return Ok(());
+            }
+        }
+        if busy {
             return Err("Stop the stream and recording before changing the source".into());
         }
         s.save();
@@ -211,41 +230,123 @@ impl Core {
     }
 
     fn is_pc_mode(&self) -> bool {
-        matches!(self.source.lock().unwrap().source, Source::Screen { .. })
+        !matches!(self.source.lock().unwrap().source, Source::Phone)
+    }
+
+    /// Starts Windows Graphics Capture + the compositor for the saved source.
+    fn start_session(&self, s: &SourceSettings) -> Result<Arc<Session>, String> {
+        let (base, base_h) = match &s.source {
+            Source::Window {
+                hwnd,
+                title,
+                process,
+            } => {
+                let w = capture::resolve_window(*hwnd, title, process)
+                    .ok_or("That window is not open any more. Pick it again.")?;
+                if w.hwnd != *hwnd {
+                    // Same app, new handle (after a restart): remember it.
+                    let mut cur = self.source.lock().unwrap();
+                    cur.source = Source::Window {
+                        hwnd: w.hwnd,
+                        title: w.title.clone(),
+                        process: w.process.clone(),
+                    };
+                    cur.save();
+                }
+                let h = capture::monitors()
+                    .iter()
+                    .find(|m| m.primary)
+                    .map(|m| m.height)
+                    .unwrap_or(1080);
+                (Base::Window { hwnd: w.hwnd }, h)
+            }
+            Source::Screen { output } => {
+                let monitors = capture::monitors();
+                let m = monitors
+                    .iter()
+                    .find(|m| m.output == *output)
+                    .or(monitors.first())
+                    .ok_or("No monitor found")?;
+                (
+                    Base::Monitor {
+                        device: m.device.clone(),
+                    },
+                    m.height,
+                )
+            }
+            Source::Phone => return Err("not a PC source".into()),
+        };
+        let canvas = layout::canvas_for(base_h);
+        Session::start(base, canvas, s.layers(), self.live.ffmpeg())
     }
 
     /// The PC screen + webcam description for FFmpeg, if the source is a screen.
     fn pc_video(&self) -> Option<Arc<PcVideo>> {
         let s = self.source.lock().unwrap();
-        let Source::Screen { output } = s.source else {
-            return None;
-        };
-        let monitors = crate::capture::monitors();
-        let m = monitors
-            .iter()
-            .find(|m| m.output == output)
-            .or(monitors.first())?;
-        Some(Arc::new(PcVideo {
-            output: m.output,
-            webcam: Some(s.webcam.clone()),
-            screen_w: m.width,
-            screen_h: m.height,
-        }))
+        match &s.source {
+            Source::Phone => None,
+            Source::Screen { output } if !s.needs_compositor() => {
+                let monitors = capture::monitors();
+                let m = monitors
+                    .iter()
+                    .find(|m| m.output == *output)
+                    .or(monitors.first())?;
+                Some(Arc::new(PcVideo {
+                    input: PcInput::Ddagrab { output: m.output },
+                    webcam: Some(s.webcam.clone()),
+                    screen_w: m.width,
+                    screen_h: m.height,
+                }))
+            }
+            _ => {
+                let session = self.session.lock().unwrap().clone()?;
+                let (w, h) = session.canvas();
+                let pipe = session.new_pipe();
+                Some(Arc::new(PcVideo {
+                    input: PcInput::Composited { session, pipe },
+                    webcam: None,
+                    screen_w: w,
+                    screen_h: h,
+                }))
+            }
+        }
     }
 
     fn apply_source(self: &Arc<Self>) {
-        // Stop any running screen preview first.
+        // Stop any running screen preview and compositor first.
         *self.screen_preview.lock().unwrap() = None;
+        *self.session.lock().unwrap() = None;
+        *self.source_error.lock().unwrap() = None;
+        let settings = self.source.lock().unwrap().clone();
+        if settings.needs_compositor() {
+            match self.start_session(&settings) {
+                Ok(s) => {
+                    diag::log(
+                        "source",
+                        format!("compositor {:?} canvas {:?}", s.base(), s.canvas()),
+                    );
+                    *self.session.lock().unwrap() = Some(s);
+                }
+                Err(e) => {
+                    diag::log("source", format!("compositor: {e}"));
+                    *self.source_error.lock().unwrap() = Some(e);
+                }
+            }
+        }
         match self.pc_video() {
             Some(pc) => {
                 diag::log(
                     "source",
                     format!(
-                        "PC screen {} ({}x{}), webcam {}",
-                        pc.output,
+                        "PC {} {}x{}, webcam {}",
+                        if pc.is_composited() {
+                            "composited"
+                        } else {
+                            "screen"
+                        },
                         pc.screen_w,
                         pc.screen_h,
-                        pc.webcam.as_ref().is_some_and(|w| w.enabled)
+                        settings.webcam.enabled
                     ),
                 );
                 self.mixer.set_pc_audio(true);
@@ -257,12 +358,7 @@ impl Core {
                 let weak_b = Arc::downgrade(self);
                 let preview = ScreenPreview::start(
                     ff,
-                    PcVideo {
-                        output: pc.output,
-                        webcam: pc.webcam.clone(),
-                        screen_w: pc.screen_w,
-                        screen_h: pc.screen_h,
-                    },
+                    pc.for_job(),
                     Arc::new(move |cfg: VideoConfig| {
                         if let Some(c) = weak_a.upgrade() {
                             c.inner.lock().unwrap().video = Some(cfg.clone());
@@ -294,6 +390,11 @@ impl Core {
                 *self.screen_preview.lock().unwrap() = Some(preview);
             }
             None => {
+                if self.is_pc_mode() {
+                    // PC source that could not start: keep PC audio, show the error.
+                    self.mixer.set_pc_audio(true);
+                    return;
+                }
                 diag::log("source", "phone");
                 self.mixer.set_pc_audio(false);
                 let mut i = self.inner.lock().unwrap();
@@ -910,6 +1011,8 @@ impl Core {
             "source": self.source.lock().unwrap().clone(),
             "sources": self.sources_cache.lock().unwrap().clone(),
             "pcMode": self.is_pc_mode(),
+            "sourceError": self.source_error.lock().unwrap().clone(),
+            "compositor": self.session.lock().unwrap().as_ref().map(|s| s.status_json()),
             "device": i.device,
             "link": i.remote,
             "video": i.video.as_ref().map(|v| json!({

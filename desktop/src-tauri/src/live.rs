@@ -518,7 +518,8 @@ impl Live {
                 kbps: p.kbps,
                 hevc: p.hevc,
                 fill: s.framing == "fill",
-                pc: pc.clone(),
+                // Composited sources get one frame pipe per FFmpeg process.
+                pc: pc.as_ref().map(|p| Arc::new(p.for_job())),
                 file: false,
             };
             let (st, sp, rk, cfg) = (
@@ -723,22 +724,15 @@ impl Job {
         .map(|s| s.to_string())
         .collect();
         a.extend(pc.inputs());
-        let audio_idx = if pc
-            .webcam
-            .as_ref()
-            .is_some_and(|c| c.enabled && !c.device.is_empty())
-        {
-            2
-        } else {
-            1
-        };
+        let audio_idx = pc.audio_index();
         a.extend(
             ["-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0"]
                 .iter()
                 .map(|s| s.to_string()),
         );
-        a.extend(pc.filter(self.w, self.h));
+        a.extend(pc.filter(self.w, self.h, self.encoder.contains("nvenc")));
         a.extend(["-map".into(), format!("{audio_idx}:a")]);
+        a.extend(pc.color_args());
         if self.file {
             // Visually lossless recording: quality-based rate control.
             a.extend(["-c:v".into(), self.encoder.clone()]);
@@ -1015,6 +1009,8 @@ fn friendly_error(line: &str) -> String {
     if l.contains("ddagrab") || (l.contains("operation not permitted") && l.contains("input")) {
         "Screen capture paused: the display is off or the PC is locked — it resumes by itself"
             .into()
+    } else if l.contains(r"\.\pipe") || (l.contains("pipe:") && l.contains("no such file")) {
+        "Capture stopped — pick the source again".into()
     } else if l.contains("dshow") || l.contains("could not find video device") {
         "Webcam not available — is another app using it?".into()
     } else if l.contains("i/o error")
@@ -1052,7 +1048,7 @@ mod tests {
         let out = std::env::temp_dir().join("phonecast_pc_test.mkv");
         std::fs::remove_file(&out).ok();
         let pc = Arc::new(PcVideo {
-            output: mon.output,
+            input: crate::capture::PcInput::Ddagrab { output: mon.output },
             webcam: None,
             screen_w: mon.width,
             screen_h: mon.height,

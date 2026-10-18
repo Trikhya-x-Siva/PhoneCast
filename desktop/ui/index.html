@@ -47,6 +47,7 @@
     <section class="stage">
       <div id="screen" class="screen">
         <canvas id="video"></canvas>
+        <div id="overlayLayer" class="overlay-layer hidden" title="Drag to move, drag the corner to resize"></div>
 
         <div id="empty" class="empty">
           <div class="phone-anim" aria-hidden="true">
@@ -131,17 +132,24 @@
           <button data-v="screen"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>This PC</button>
         </div>
         <div id="pcOptions" class="pc-options hidden">
-          <label class="field"><span>Screen</span><select id="monitorSelect"></select></label>
+          <label class="field"><span>Capture</span>
+            <div class="key-row"><select id="captureSelect"></select><button id="refreshWindows" class="mini" title="Refresh the list of open windows">&#x21bb;</button></div>
+          </label>
+          <p id="sourceError" class="source-error hidden"></p>
           <label class="switch" style="margin:10px 0 6px"><input type="checkbox" id="camToggle"><span class="track"><span class="knob"></span></span>Webcam picture-in-picture</label>
           <div id="camOptions" class="cam-options hidden">
             <label class="field"><span>Camera</span><select id="camSelect"></select></label>
             <div class="row2">
-              <label class="field"><span>Size</span><select id="camSize"><option value="0.18">Small</option><option value="0.25" selected>Medium</option><option value="0.33">Large</option></select></label>
-              <label class="field"><span>Corner</span><select id="camCorner"><option value="br" selected>Bottom right</option><option value="bl">Bottom left</option><option value="tr">Top right</option><option value="tl">Top left</option></select></label>
+              <label class="field"><span>Size</span><select id="camSize"><option value="0.18">Small</option><option value="0.25" selected>Medium</option><option value="0.33">Large</option><option value="0.45">Huge</option></select></label>
+              <label class="field"><span>Position</span><select id="camCorner"><option value="br" selected>Bottom right</option><option value="bl">Bottom left</option><option value="tr">Top right</option><option value="tl">Top left</option><option value="free">Where I dragged it</option></select></label>
             </div>
             <label class="switch" style="margin-top:6px"><input type="checkbox" id="camMirror"><span class="track"><span class="knob"></span></span>Mirror</label>
           </div>
-          <p class="hint">Captures the whole screen straight on the GPU. For PC games use borderless/windowed fullscreen; exclusive fullscreen may show black.</p>
+          <div class="card-head overlays-head"><span>Overlays</span>
+            <span><button id="addImage" class="mini" title="Add a PNG logo or image">+ Image</button> <button id="addText" class="mini" title="Add a line of text">+ Text</button></span>
+          </div>
+          <div id="overlayList" class="overlay-list"></div>
+          <p id="sourceHint" class="hint">Captures the whole screen straight on the GPU. For PC games use borderless/windowed fullscreen; exclusive fullscreen may show black.</p>
         </div>
       </div>
 

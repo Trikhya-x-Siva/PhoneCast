@@ -5,6 +5,7 @@ mod adb;
 mod ai;
 mod audio;
 mod capture;
+mod compositor;
 mod core;
 mod diag;
 mod live;
@@ -108,6 +109,15 @@ fn get_sources(core: CoreState) -> Value {
 #[tauri::command]
 fn set_source(core: CoreState, settings: capture::SourceSettings) -> Result<(), String> {
     core.set_source(settings)
+}
+
+/// Native file dialog for a PNG overlay (runs off the UI thread).
+#[tauri::command]
+async fn pick_image() -> Option<String> {
+    tauri::async_runtime::spawn_blocking(capture::pick_png)
+        .await
+        .ok()
+        .flatten()
 }
 
 #[tauri::command]
@@ -234,6 +244,7 @@ fn main() {
             stop_live,
             get_sources,
             set_source,
+            pick_image,
             get_log,
             open_logs,
             open_recordings,

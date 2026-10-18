@@ -339,3 +339,21 @@ dd { margin: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; wh
 
 @media (max-width: 1150px) { .toggles { gap: 10px; } .strips { gap: 8px; } aside { width: 290px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* ---------------- window capture + overlays ---------------- */
+.source-error { margin: 6px 0 0; padding: 8px 10px; border-radius: 10px; background: rgba(255,93,114,.12); border: 1px solid rgba(255,93,114,.35); color: #ffb3bd; font-size: 12.5px; line-height: 1.45; }
+.overlays-head { margin: 14px 0 6px; color: var(--muted); font-size: 12px; }
+.overlay-list { display: flex; flex-direction: column; gap: 6px; }
+.ov-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 10px; background: rgba(0,0,0,.2); border: 1px solid var(--line); font-size: 12.5px; }
+.ov-icon { width: 18px; text-align: center; color: var(--muted); font-weight: 700; }
+.ov-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-text { flex: 1 1 auto; width: 0; min-width: 0; padding: 5px 8px; border-radius: 8px; background: rgba(0,0,0,.3); border: 1px solid var(--line); color: var(--text); font: inherit; outline: none; }
+.ov-size { flex: 0 0 auto; width: auto; margin: 0; padding: 4px 6px; border-radius: 8px; background: rgba(0,0,0,.3); border: 1px solid var(--line); color: var(--text); font: inherit; }
+.ov-color { width: 26px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
+.overlay-layer { position: absolute; pointer-events: none; }
+.ov-box { position: absolute; pointer-events: auto; border: 1.5px dashed rgba(255,255,255,.55); border-radius: 4px; cursor: move; touch-action: none; transition: border-color .15s, background .15s; }
+.ov-box:hover, .ov-box.active { border-color: var(--accent); border-style: solid; background: rgba(124,92,255,.12); }
+.ov-box .tag { position: absolute; left: 0; top: -20px; padding: 1px 6px; border-radius: 6px; background: rgba(0,0,0,.65); color: #fff; font-size: 11px; opacity: 0; transition: opacity .15s; white-space: nowrap; }
+.ov-box:hover .tag, .ov-box.active .tag { opacity: 1; }
+.ov-box .rs { position: absolute; right: -6px; bottom: -6px; width: 12px; height: 12px; border-radius: 3px; background: var(--accent); cursor: nwse-resize; opacity: 0; }
+.ov-box:hover .rs, .ov-box.active .rs { opacity: 1; }

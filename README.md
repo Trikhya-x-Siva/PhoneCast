@@ -45,10 +45,14 @@ Grab the latest **Windows installer** and **Android APK** from
    the PC app shows. 5 GHz Wi-Fi recommended.
 
 ### PC
-1. In the **Source** panel choose **This PC** and the monitor.
-2. Optionally switch on **Webcam picture-in-picture** and pick a corner.
-3. Run your game in borderless/windowed fullscreen. (Exclusive fullscreen and
-   anti-cheat-protected games may show black; see the roadmap.)
+1. In the **Source** panel choose **This PC**, then under **Capture** pick a
+   screen or one window (game, emulator, any app). Click ↻ if a window you
+   just opened is missing.
+2. Optionally switch on **Webcam picture-in-picture**.
+3. Add a logo with **+ Image** or a caption with **+ Text**. Drag them (and
+   the webcam) on the preview to place them; drag the corner to resize.
+4. Run your game in borderless/windowed fullscreen. (Exclusive fullscreen and
+   anti-cheat-protected games may show black.)
 
 ### Audio
 Discord on the PC (app or Chrome/Edge/Firefox) is picked up automatically
@@ -99,6 +103,8 @@ RAM use are shown next to the switch.
 | Phone stuck on "Waiting for PC" | Open the PC app first; on Wi-Fi allow PhoneCast in Windows Firewall |
 | No game sound from phone | Some games block audio capture (a game-side setting) |
 | Screen capture paused | The display is off or the PC is locked; it resumes automatically |
+| "That window is not open any more" | Open the app again, click ↻ in **Capture** and pick it |
+| Captured window is black | Switch the game to borderless or windowed mode; minimised windows show black |
 | Webcam not available | Close other apps using the camera |
 | Stream stutters | Click **Open diagnostics**: the log names the slow stage (upload, disk, phone heat) |
 
