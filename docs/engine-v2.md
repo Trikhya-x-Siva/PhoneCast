@@ -273,8 +273,8 @@ What this means:
   stream is decoded once (NVDEC about halved).
 - Not measured in v1: piping MKV into each process and encoding AAC once per
   process. v2 does both once.
-- v2 adds rustls encryption in-process: about 2–3 % of one core at
-  20 Mbps.
+- v2 adds rustls encryption in-process. That isn't measured yet; AES-GCM at
+  20 Mbps should cost well under 5 % of one core.
 
 ## Open risks
 
