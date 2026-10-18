@@ -168,7 +168,55 @@
     g.restore();
   }
 
-  function drawBlitz(g, W, H, s, t) {
+  // "SUBSCRIBE" button with a ringing bell that slides in from the right.
+  // p = 0..1 through the pop-up (in, hold, out).
+  function subscribePopup(g, W, H, s, p) {
+    const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+    const inK = ease(p / 0.18), outK = ease((p - 0.82) / 0.18);
+    const k = p < 0.82 ? inK : 1 - outK;
+    if (k <= 0) return;
+    const pad = Math.round(H * 0.12);
+    const bh = H * 0.5, bw = H * 2.6;
+    const x = W - pad * 1.6 - bw + (1 - k) * (bw + pad * 2), y = H / 2 - bh / 2 + 3;
+    const swing = Math.sin(p * TAU * 6) * 0.35 * (p > 0.15 && p < 0.85 ? 1 : 0);
+    subscribeButton(g, x, y, bh, swing, k);
+  }
+
+  // Red "SUBSCRIBE" button with a bell, at (x, y), bh tall.
+  function subscribeButton(g, x, y, bh, swing, alpha) {
+    const bw = bh * 5.2;
+    g.save();
+    g.globalAlpha = alpha;
+    g.shadowColor = "#ff2d4b";
+    g.shadowBlur = bh * 0.36;
+    g.fillStyle = "#ff2d4b";
+    g.beginPath();
+    g.roundRect(x, y, bw, bh, bh * 0.22);
+    g.fill();
+    g.shadowBlur = 0;
+    // Bell (swings while held).
+    const bx = x + bh * 0.62, by = y + bh / 2, r = bh * 0.26;
+    g.save();
+    g.translate(bx, by - r * 0.9);
+    g.rotate(swing);
+    g.fillStyle = "#fff";
+    g.beginPath();
+    g.moveTo(-r, r * 1.3);
+    g.quadraticCurveTo(-r, -r * 0.2, 0, -r * 0.35);
+    g.quadraticCurveTo(r, -r * 0.2, r, r * 1.3);
+    g.closePath();
+    g.fill();
+    g.beginPath();
+    g.arc(0, r * 1.55, r * 0.28, 0, TAU);
+    g.fill();
+    g.restore();
+    g.fillStyle = "#fff";
+    g.font = `italic 900 ${Math.round(bh * 0.42)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+    g.fillText("SUBSCRIBE", x + bh * 1.15, y + bh * 0.66);
+    g.restore();
+  }
+
+  function drawBlitz(g, W, H, s, t, popup) {
     const c1 = s.color, c2 = s.color2;
     const bg = g.createLinearGradient(0, 0, W, 0);
     bg.addColorStop(0, "#070a14");
@@ -230,7 +278,8 @@
     g.fillStyle = "#b8c0dc";
     g.fillText(s.line || "@yourhandle · Subscribe", x, H * 0.83);
 
-    if (s.right) {
+    if (popup > 0) subscribePopup(g, W, H, s, popup);
+    if (s.right && !(popup > 0.1 && popup < 0.9)) {
       g.font = `italic 900 ${Math.round(H * 0.2)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
       const tw = g.measureText(s.right).width;
       const ph = H * 0.4, dot = ph * 0.22, pw = tw + ph * 1.2 + dot * 2.2;
@@ -310,7 +359,118 @@
     }
   }
 
-  function draw(g, W, H, s, t) {
+  const SCENES = {
+    starting: { title: "STARTING SOON", sub: "Grab your snacks · the match is about to begin" },
+    brb: { title: "BE RIGHT BACK", sub: "Don't go anywhere · back in a moment" },
+    thanks: { title: "THANKS FOR WATCHING", sub: "Subscribe & hit the bell for the next stream" },
+  };
+
+  // A full scene that replaces the game picture: navy, lightning glows,
+  // drifting streaks, the avatar large in its energy ring, big gradient
+  // title, a subtitle, channel line and a scene-specific animated detail.
+  function drawScene(g, W, H, s, name, t) {
+    const sc = SCENES[name] || SCENES.starting;
+    const c1 = s.color, c2 = s.color2;
+    const bg = g.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, "#060914");
+    bg.addColorStop(0.6, "#0b1024");
+    bg.addColorStop(1, "#150a28");
+    g.fillStyle = bg;
+    g.fillRect(0, 0, W, H);
+    for (const [x, y, col, k] of [[0.22, 0.5, c1, 1], [0.85, 0.2, c2, 0.8], [0.75, 0.95, c1, 0.6]]) {
+      const pr = 0.85 + 0.15 * Math.sin(t * TAU + x * 10);
+      const r = g.createRadialGradient(W * x, H * y, 0, W * x, H * y, W * 0.45 * pr);
+      r.addColorStop(0, col + Math.round(80 * k).toString(16).padStart(2, "0"));
+      r.addColorStop(1, col + "00");
+      g.fillStyle = r;
+      g.fillRect(0, 0, W, H);
+    }
+    // Drifting diagonal streaks (one spacing per loop: seamless).
+    const sp = 90;
+    g.save();
+    g.globalAlpha = 0.07;
+    g.strokeStyle = "#fff";
+    for (let i = -3; i < W / sp + 3; i++) {
+      const x = i * sp + t * sp;
+      g.lineWidth = 1 + (((i % 3) + 3) % 3);
+      g.beginPath();
+      g.moveTo(x, H);
+      g.lineTo(x + H * 0.5, 0);
+      g.stroke();
+    }
+    g.restore();
+    // Floating particles.
+    for (let i = 0; i < 40; i++) {
+      const px = rand(i) * W, base = rand(i + 50) * H;
+      const py = (base - t * H * 0.25 * (0.5 + rand(i + 9)) + H) % H;
+      g.fillStyle = (i % 2 ? c2 : c1) + "99";
+      g.beginPath();
+      g.arc(px, py, 1.5 + rand(i + 3) * 3, 0, TAU);
+      g.fill();
+    }
+    // Avatar, big, left of centre.
+    const d = Math.min(H * 0.56, W * 0.3);
+    const ax = W * 0.27, ay = H * 0.5 + (name === "brb" ? Math.sin(t * TAU) * H * 0.015 : 0);
+    avatar(g, ax, ay, d, s, t);
+    // Title.
+    const tx = W * 0.27 + d * 0.75;
+    const titleSize = Math.round(Math.min(H * 0.13, (W - tx - W * 0.05) / (sc.title.length * 0.62)));
+    shinyText(g, sc.title, tx, H * 0.47,
+      `italic 900 ${titleSize}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`,
+      [[0, "#ffffff"], [0.5, "#e8eaff"], [1, c2]], c1 + "cc", t, H);
+    g.fillStyle = "#c3c9e4";
+    const small = Math.max(titleSize * 0.32, H * 0.034);
+    g.font = `600 ${Math.round(small)}px "Segoe UI", system-ui, sans-serif`;
+    g.fillText(sc.sub, tx, H * 0.47 + titleSize * 0.3 + small * 1.2);
+    // Channel line.
+    g.fillStyle = "#ffffff";
+    const chY = H * 0.47 + titleSize * 0.3 + small * 2.9;
+    g.font = `italic 900 ${Math.round(small * 1.15)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+    const ch = s.title || "Your channel";
+    g.fillText(ch, tx, chY);
+    const cw = g.measureText(ch + "  ").width;
+    g.fillStyle = "#9aa3c7";
+    g.font = `600 ${Math.round(small * 0.9)}px "Segoe UI", system-ui, sans-serif`;
+    g.fillText(s.right || "", tx + cw, chY);
+    // Scene detail.
+    const lineY = chY + small * 1.1, lw = Math.min(W * 0.42, W - tx - W * 0.06);
+    if (name === "starting") {
+      // Loading bar that fills and restarts each loop, with a glowing head.
+      g.fillStyle = "#ffffff18";
+      g.beginPath();
+      g.roundRect(tx, lineY, lw, H * 0.012, H * 0.006);
+      g.fill();
+      const f = t;
+      const bar = g.createLinearGradient(tx, 0, tx + lw, 0);
+      bar.addColorStop(0, c1);
+      bar.addColorStop(1, c2);
+      g.fillStyle = bar;
+      g.beginPath();
+      g.roundRect(tx, lineY, Math.max(H * 0.012, lw * f), H * 0.012, H * 0.006);
+      g.fill();
+      g.shadowColor = c2;
+      g.shadowBlur = H * 0.04;
+      g.fillStyle = "#fff";
+      g.beginPath();
+      g.arc(tx + lw * f, lineY + H * 0.006, H * 0.012, 0, TAU);
+      g.fill();
+      g.shadowBlur = 0;
+    } else if (name === "brb") {
+      // Three bouncing dots.
+      for (let i = 0; i < 3; i++) {
+        const b = Math.max(0, Math.sin(t * TAU * 2 - i * 0.7));
+        g.fillStyle = i === 1 ? c2 : c1;
+        g.beginPath();
+        g.arc(tx + i * H * 0.05 + H * 0.02, lineY + H * 0.02 - b * H * 0.025, H * 0.014, 0, TAU);
+        g.fill();
+      }
+    } else {
+      const bh = Math.max(H * 0.075, small * 1.9);
+      subscribeButton(g, tx, lineY, bh, Math.sin(t * TAU * 3) * 0.3, 1);
+    }
+  }
+
+  function draw(g, W, H, s, t, popup) {
     g.save();
     g.clearRect(0, 0, W, H);
     g.textBaseline = "alphabetic";
@@ -321,7 +481,7 @@
     } else if (s.style === "clean") {
       drawClean(g, W, H, s);
     } else {
-      drawBlitz(g, W, H, s, t);
+      drawBlitz(g, W, H, s, t, popup || 0);
     }
     g.restore();
   }
@@ -331,5 +491,23 @@
     return !s.image && s.style !== "clean";
   }
 
-  window.BannerArt = { draw, animated, LOOP_SECONDS, FPS };
+  function scene(g, W, H, s, name, t) {
+    g.save();
+    g.clearRect(0, 0, W, H);
+    g.textBaseline = "alphabetic";
+    drawScene(g, W, H, s, name, t);
+    g.restore();
+  }
+
+  // The streamed banner loop: 20 s, the Subscribe pop-up in the last 4 s.
+  const BANNER_LOOP_SECONDS = 20;
+  const POPUP_FROM = 16;
+  /** Banner frame at second `sec` of the 20 s loop. */
+  function bannerAt(g, W, H, s, sec) {
+    const t = (sec % LOOP_SECONDS) / LOOP_SECONDS;
+    const p = sec >= POPUP_FROM ? (sec - POPUP_FROM) / (BANNER_LOOP_SECONDS - POPUP_FROM) : 0;
+    draw(g, W, H, s, t, p);
+  }
+
+  window.BannerArt = { draw, bannerAt, scene, animated, LOOP_SECONDS, BANNER_LOOP_SECONDS, FPS, SCENE_SECONDS: 4 };
 })();

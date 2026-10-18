@@ -298,7 +298,9 @@
       previewRaf = 0;
       return;
     }
-    drawBanner(((now / 1000) % BannerArt.LOOP_SECONDS) / BannerArt.LOOP_SECONDS);
+    const H = stripHeight();
+    if (canvas.height !== H) canvas.height = H;
+    BannerArt.bannerAt(canvas.getContext("2d"), canvas.width, H, bn, (now / 1000) % BannerArt.BANNER_LOOP_SECONDS);
     previewRaf = requestAnimationFrame(preview);
   }
   function startPreview() {
@@ -308,6 +310,18 @@
   function toPng(c) {
     return new Promise((ok) => c.toBlob(async (b) => ok(new Uint8Array(await b.arrayBuffer())), "image/png"));
   }
+  function toJpeg(c) {
+    return new Promise((ok) => c.toBlob(async (b) => ok(new Uint8Array(await b.arrayBuffer())), "image/jpeg", 0.93));
+  }
+
+  // The banner design, for scenes drawn in the same style.
+  window.getBannerSpec = () => bn;
+  window.bannerDesignKey = () => {
+    const str = JSON.stringify([bn.style, bn.title, bn.line, bn.right, bn.color, bn.color2, bn.logo ? bn.logo.src.length + bn.logo.src.slice(-64) : ""]);
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
+    return (h >>> 0).toString(36);
+  };
 
   // Saves the banner: the first frame as banner.png (plus the editor
   // settings), and for a moving banner every frame of the loop, which the
@@ -331,11 +345,12 @@
     BannerArt.draw(g, off.width, H, bn, 0);
     const first = await toPng(off);
     await invoke("save_banner", { png: Array.from(first), spec });
-    const n = BannerArt.animated(bn) ? BannerArt.LOOP_SECONDS * BannerArt.FPS : 0;
+    // Moving banner: a 20 s loop (Subscribe pop-up in its last 4 s).
+    const n = BannerArt.animated(bn) ? BannerArt.BANNER_LOOP_SECONDS * BannerArt.FPS : 0;
     const frames = [];
     for (let i = 0; i < n; i++) {
-      BannerArt.draw(g, off.width, H, bn, i / n);
-      frames.push(await toPng(off));
+      BannerArt.bannerAt(g, off.width, H, bn, i / BannerArt.FPS);
+      frames.push(await toJpeg(off));
     }
     const total = frames.reduce((a, f) => a + f.length, 0);
     const body = new Uint8Array(total);

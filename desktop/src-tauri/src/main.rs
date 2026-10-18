@@ -16,6 +16,7 @@ mod mkv;
 mod prefs;
 mod presets;
 mod replay;
+mod scenes;
 mod setup;
 mod sinks;
 
@@ -110,10 +111,11 @@ fn save_banner(png: Vec<u8>, spec: serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Saves the frames of a moving banner (PNG files back to back in the body,
-/// their sizes in the `x-sizes` header). No frames = a still banner.
-#[tauri::command]
-fn save_banner_frames(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+/// Saves a moving banner: its frames (JPEG or PNG back to back in the body,
+/// sizes in `x-sizes`, 30 fps) become one looping video file the stream
+/// plays under the game. No frames = a still banner.
+#[tauri::command(async)]
+fn save_banner_frames(core: CoreState, request: tauri::ipc::Request<'_>) -> Result<(), String> {
     let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
         return Err("expected raw frame data".into());
     };
@@ -126,7 +128,7 @@ fn save_banner_frames(request: tauri::ipc::Request<'_>) -> Result<(), String> {
         .filter(|s| !s.is_empty())
         .map(|s| s.parse().map_err(|_| "bad frame size".to_string()))
         .collect::<Result<_, _>>()?;
-    if sizes.iter().sum::<usize>() != body.len() || sizes.len() > 600 {
+    if sizes.iter().sum::<usize>() != body.len() || sizes.len() > 1200 {
         return Err("frame data does not match its sizes".into());
     }
     let root = live::banner_frames_root();
@@ -167,13 +169,55 @@ fn save_banner_frames(request: tauri::ipc::Request<'_>) -> Result<(), String> {
     let dir = root.join(&name);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let mut at = 0;
+    let mut ext = "png";
     for (i, n) in sizes.iter().enumerate() {
         let f = &body[at..at + n];
-        if !f.starts_with(&[0x89, b'P', b'N', b'G']) {
-            return Err("frame is not a PNG".into());
-        }
-        std::fs::write(dir.join(format!("{i:03}.png")), f).map_err(|e| e.to_string())?;
+        ext = if f.starts_with(&[0xFF, 0xD8]) {
+            "jpg"
+        } else if f.starts_with(&[0x89, b'P', b'N', b'G']) {
+            "png"
+        } else {
+            return Err("frame is not a JPEG or PNG".into());
+        };
+        std::fs::write(dir.join(format!("{i:04}.{ext}")), f).map_err(|e| e.to_string())?;
         at += n;
+    }
+    // One small looping video: decoding it costs far less than reading
+    // hundreds of images, and it is a single file to swap.
+    let ffmpeg = core
+        .live
+        .ffmpeg()
+        .ok_or("FFmpeg is not installed on this PC")?;
+    let mut cmd = std::process::Command::new(ffmpeg);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-framerate",
+        "30",
+        "-i",
+    ])
+    .arg(dir.join(format!("%04d.{ext}")))
+    .args([
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p", "-g", "60",
+        "-an",
+    ])
+    .arg(dir.join("loop.mp4"));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!(
+            "could not make the banner loop: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    for i in 0..sizes.len() {
+        std::fs::remove_file(dir.join(format!("{i:04}.{ext}"))).ok();
     }
     set_current(&name)?;
     prune(&name);
@@ -186,6 +230,48 @@ fn save_banner_frames(request: tauri::ipc::Request<'_>) -> Result<(), String> {
         ),
     );
     Ok(())
+}
+
+/// Encodes a scene (JPEG frames back to back in the body, sizes in
+/// `x-sizes`, scene name in `x-name`, design hash in `x-design`).
+#[tauri::command(async)]
+fn prepare_scene(core: CoreState, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
+        return Err("expected raw frame data".into());
+    };
+    let h = |k: &str| {
+        request
+            .headers()
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    let sizes: Vec<usize> = h("x-sizes")
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse().map_err(|_| "bad frame size".to_string()))
+        .collect::<Result<_, _>>()?;
+    if sizes.is_empty() || sizes.iter().sum::<usize>() != body.len() || sizes.len() > 600 {
+        return Err("frame data does not match its sizes".into());
+    }
+    let mut frames = Vec::with_capacity(sizes.len());
+    let mut at = 0;
+    for n in sizes {
+        frames.push(&body[at..at + n]);
+        at += n;
+    }
+    core.prepare_scene(&h("x-name"), &h("x-design"), &frames)
+}
+
+#[tauri::command]
+fn scene_ready(core: CoreState, name: String, design: String) -> bool {
+    core.scene_ready(&name, &design)
+}
+
+#[tauri::command]
+fn set_scene(core: CoreState, name: Option<String>, design: String) -> Result<(), String> {
+    core.set_scene(name.as_deref(), &design)
 }
 
 /// The banner editor's last settings (or null).
@@ -430,8 +516,47 @@ fn ai_open_url(url: String) -> bool {
         .is_ok()
 }
 
+/// Puts PhoneCast in a Windows job that closes every program it started
+/// (FFmpeg, the AI helper) when PhoneCast ends in any way, even a crash or
+/// Task Manager. Leftover FFmpeg screen captures otherwise keep Windows'
+/// limited desktop-duplication slots ("Too many open duplication sessions")
+/// and the next PC-mode stream cannot start.
+#[cfg(windows)]
+fn close_children_with_phonecast() {
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    // SAFETY: plain Win32 calls with valid arguments; the job handle is kept
+    // open for the life of the process on purpose (closing it ends the job).
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if ok == 0 || AssignProcessToJobObject(job, GetCurrentProcess()) == 0 {
+            diag::log(
+                "app",
+                "could not tie child programs to PhoneCast (job object)",
+            );
+        }
+    }
+}
+
 fn main() {
     diag::init();
+    #[cfg(windows)]
+    close_children_with_phonecast();
     tauri::Builder::default()
         .setup(|app| {
             let core = Core::start(app.handle().clone()).map_err(|e| {
@@ -497,6 +622,9 @@ fn main() {
             set_game_mode,
             save_banner,
             save_banner_frames,
+            prepare_scene,
+            scene_ready,
+            set_scene,
             get_banner,
             set_clip_look,
             open_clips,

@@ -196,6 +196,10 @@ impl Ai {
                 }
             }
         };
+        // On Windows an accepted socket inherits the listener's non-blocking
+        // mode: the reader then hit "would block" on its first empty read,
+        // took that for the helper quitting and stopped it ~3 ms after start.
+        sock.set_nonblocking(false).ok();
         sock.set_nodelay(true).ok();
         sock.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let mut reader = BufReader::new(sock.try_clone().map_err(|e| e.to_string())?);

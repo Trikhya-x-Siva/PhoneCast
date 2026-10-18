@@ -135,6 +135,10 @@ pub struct Core {
     device_warnings: Mutex<Vec<String>>,
     /// End timestamp of the last audio chunk sent out (see `audio_in_order`).
     audio_end: Mutex<Option<i64>>,
+    /// Scene shown instead of the phone picture (see `scenes`).
+    scene: Mutex<crate::scenes::SceneState>,
+    /// Prepared scenes by key (scene name + design + phone size + codec).
+    scene_cache: Mutex<std::collections::HashMap<String, Arc<Vec<crate::scenes::Frame>>>>,
     /// 16:9 game mode (phone screen size while streaming over USB).
     pub gamemode: Arc<GameMode>,
 }
@@ -170,6 +174,8 @@ impl Core {
             hotkeys: Mutex::new(None),
             device_warnings: Mutex::new(Vec::new()),
             audio_end: Mutex::new(None),
+            scene: Mutex::new(Default::default()),
+            scene_cache: Mutex::new(Default::default()),
             gamemode: Arc::new(GameMode::new()),
         });
         // A previous run may have left the phone in 16:9 (crash, power cut).
@@ -713,6 +719,9 @@ impl Core {
                             ),
                         );
                     }
+                    if i.phone_video.as_ref().is_some_and(|old| old != &cfg) {
+                        *self.scene.lock().unwrap() = Default::default();
+                    }
                     i.phone_video = Some(cfg.clone());
                     if self.is_pc_mode() {
                         return; // PC screen is the source; keep the phone's config for later
@@ -739,12 +748,26 @@ impl Core {
                         }
                     }
                 }
+                // The preview keeps showing the game; the outputs get the
+                // scene while one is on.
                 self.broadcast(ty, flags, pts, &payload);
-                self.dispatch(Media::Video {
-                    pts,
-                    key,
-                    data: Arc::new(payload),
-                });
+                let (key, data) = {
+                    let mut sc = self.scene.lock().unwrap();
+                    if matches!(*sc, crate::scenes::SceneState::Off) {
+                        (key, Arc::new(payload))
+                    } else {
+                        let csd = self
+                            .inner
+                            .lock()
+                            .unwrap()
+                            .phone_video
+                            .as_ref()
+                            .map(|v| v.csd.clone())
+                            .unwrap_or_default();
+                        sc.substitute(key, Arc::new(payload), &csd)
+                    }
+                };
+                self.dispatch(Media::Video { pts, key, data });
             }
             AUDIO_CONFIG if payload.len() >= 6 => {
                 let rate = u32::from_be_bytes(payload[0..4].try_into().unwrap());
@@ -1215,6 +1238,7 @@ impl Core {
             "live": self.live.status_json(),
             "adb": adb,
             "replay": replay,
+            "scene": self.scene.lock().unwrap().name(),
             "gameMode": json!({
                 "enabled": self.prefs.lock().unwrap().game_16x9,
                 "active": self.gamemode.active(),
@@ -1414,6 +1438,103 @@ impl Core {
     /// Tells the phone app whether to send its mic (only while chosen).
     fn send_phone_mic(&self) {
         self.send_phone(SET_MIC, &[self.mixer.uses_phone_mic() as u8]);
+    }
+
+    /// Key of a prepared scene for the phone's current picture.
+    fn scene_key(
+        &self,
+        name: &str,
+        design: &str,
+    ) -> Result<(String, crate::mkv::VideoConfig), String> {
+        if self.is_pc_mode() {
+            return Err("Scenes work with the phone source for now".into());
+        }
+        let cfg = self
+            .inner
+            .lock()
+            .unwrap()
+            .phone_video
+            .clone()
+            .ok_or("Start streaming on the phone first")?;
+        let key = format!("{name}-{design}-{}x{}-{}", cfg.width, cfg.height, cfg.codec);
+        Ok((key, cfg))
+    }
+
+    /// True when this scene (for this design and phone picture) is ready.
+    pub fn scene_ready(&self, name: &str, design: &str) -> bool {
+        self.scene_key(name, design)
+            .is_ok_and(|(k, _)| self.scene_cache.lock().unwrap().contains_key(&k))
+    }
+
+    /// Encodes a scene from the UI's JPEG frames for the current phone picture.
+    pub fn prepare_scene(&self, name: &str, design: &str, jpegs: &[&[u8]]) -> Result<(), String> {
+        let (key, cfg) = self.scene_key(name, design)?;
+        let ffmpeg = self
+            .live
+            .ffmpeg()
+            .ok_or("FFmpeg is not installed on this PC")?;
+        let started = Instant::now();
+        let hevc = cfg.codec == crate::mkv::CODEC_H265;
+        let frames = crate::scenes::encode(
+            &ffmpeg,
+            jpegs,
+            cfg.width as u32,
+            cfg.height as u32,
+            hevc,
+            &key.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_"),
+        )?;
+        diag::log(
+            "scene",
+            format!(
+                "{name} ready: {} frames, {} KB, {} ms",
+                frames.len(),
+                frames.iter().map(|f| f.1.len()).sum::<usize>() / 1024,
+                started.elapsed().as_millis()
+            ),
+        );
+        self.scene_cache
+            .lock()
+            .unwrap()
+            .insert(key, Arc::new(frames));
+        Ok(())
+    }
+
+    /// Shows a prepared scene (`Some`) or goes back to the game (`None`).
+    pub fn set_scene(&self, name: Option<&str>, design: &str) -> Result<(), String> {
+        use crate::scenes::SceneState;
+        match name {
+            Some(n) => {
+                let (key, _) = self.scene_key(n, design)?;
+                let frames = self
+                    .scene_cache
+                    .lock()
+                    .unwrap()
+                    .get(&key)
+                    .cloned()
+                    .ok_or("That scene is not ready yet")?;
+                *self.scene.lock().unwrap() = SceneState::On {
+                    name: n.to_string(),
+                    frames,
+                    next: 0,
+                };
+                diag::log("scene", format!("showing {n}"));
+            }
+            None => {
+                let mut sc = self.scene.lock().unwrap();
+                let state = std::mem::take(&mut *sc);
+                *sc = match state {
+                    SceneState::On { name, frames, next } => {
+                        diag::log("scene", format!("back to the game from {name}"));
+                        SceneState::Leaving { name, frames, next }
+                    }
+                    other => other,
+                };
+                drop(sc);
+                // The game comes back on the phone's next keyframe.
+                self.request_keyframe();
+            }
+        }
+        Ok(())
     }
 
     pub fn set_voice_app(&self, id: &str) {

@@ -980,7 +980,7 @@ pub fn banner_frames_root() -> std::path::PathBuf {
     banner_path().with_file_name("banner_frames")
 }
 
-/// Frames of the current moving banner (000.png, 001.png, ... a 2 s loop at
+/// Folder of the current moving banner (its `loop.mp4`: a 20 s loop at
 /// 30 fps), or None for a still banner. Each save goes to a new numbered
 /// folder named in `current.txt`, so a running stream keeps reading the
 /// version it started with while the banner is being edited.
@@ -988,18 +988,18 @@ pub fn banner_frames_dir() -> Option<std::path::PathBuf> {
     let root = banner_frames_root();
     let name = std::fs::read_to_string(root.join("current.txt")).ok()?;
     let dir = root.join(name.trim());
-    (!name.trim().is_empty() && dir.join("000.png").exists()).then_some(dir)
+    (!name.trim().is_empty() && dir.join("loop.mp4").exists()).then_some(dir)
 }
 
 /// FFmpeg input for the banner strip: the moving loop (repeated forever),
 /// else the saved still image, else a plain dark strip until one is made.
 /// One frame a second is plenty for a still image.
 fn banner_input() -> Vec<String> {
-    if let Some(frames) = banner_frames_dir() {
-        return ["-framerate", "30", "-loop", "1", "-i"]
+    if let Some(dir) = banner_frames_dir() {
+        return ["-stream_loop", "-1", "-i"]
             .iter()
             .map(|s| s.to_string())
-            .chain([frames.join("%03d.png").to_string_lossy().into_owned()])
+            .chain([dir.join("loop.mp4").to_string_lossy().into_owned()])
             .collect();
     }
     let p = banner_path();

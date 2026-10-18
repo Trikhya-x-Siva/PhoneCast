@@ -272,6 +272,7 @@ function render(s) {
   renderLive(s.live);
   renderSource(s);
   renderReplay(s.replay);
+  renderScene(s);
 }
 
 
@@ -953,6 +954,65 @@ function renderReplay(r) {
     ? `${r.buffered} s ready (${mb} MB in memory). Clips are saved as MP4 in Videos\\PhoneCast\\Clips without re-encoding.`
     : "Turn the buffer on to save clips of what just happened. It lives in memory only.";
   for (const b of document.querySelectorAll(".clip")) b.disabled = !r.seconds || r.buffered < 1;
+}
+
+// ---------------- scenes ----------------
+// Drawn here with the banner's design at the phone picture's exact size
+// (4 s loop, 30 fps), encoded once by Rust into the phone's own format,
+// then switched on and off instantly.
+let currentScene = null;
+async function prepareScene(name) {
+  const v = window.lastStatus && window.lastStatus.video;
+  if (!v) throw new Error("Start streaming on the phone first");
+  const spec = window.getBannerSpec();
+  const design = window.bannerDesignKey();
+  if (await invoke("scene_ready", { name, design })) return design;
+  const c = document.createElement("canvas");
+  c.width = v.width;
+  c.height = v.height;
+  const g = c.getContext("2d");
+  const n = BannerArt.SCENE_SECONDS * BannerArt.FPS;
+  const frames = [];
+  for (let i = 0; i < n; i++) {
+    BannerArt.scene(g, c.width, c.height, spec, name, i / n);
+    frames.push(await new Promise((ok) => c.toBlob(async (b) => ok(new Uint8Array(await b.arrayBuffer())), "image/jpeg", 0.92)));
+  }
+  const body = new Uint8Array(frames.reduce((a, f) => a + f.length, 0));
+  let at = 0;
+  for (const f of frames) {
+    body.set(f, at);
+    at += f.length;
+  }
+  await invoke("prepare_scene", body, { headers: { "x-sizes": frames.map((f) => f.length).join(","), "x-name": name, "x-design": design } });
+  return design;
+}
+for (const b of document.querySelectorAll(".scene")) {
+  b.addEventListener("click", async () => {
+    const name = b.dataset.scene || null;
+    b.classList.add("busy");
+    try {
+      if (name) {
+        const first = !(await invoke("scene_ready", { name, design: window.bannerDesignKey() }));
+        if (first) toast("Preparing the scene (first time takes a few seconds)…");
+        const design = await prepareScene(name);
+        await invoke("set_scene", { name, design });
+        toast(`${b.textContent} is on`);
+      } else {
+        await invoke("set_scene", { name: null, design: "" });
+        toast("Back to the game");
+      }
+    } catch (e) {
+      toast(String(e.message || e));
+    } finally {
+      b.classList.remove("busy");
+    }
+  });
+}
+function renderScene(s) {
+  const on = s.scene || null;
+  if (on === currentScene) return;
+  currentScene = on;
+  for (const b of document.querySelectorAll(".scene")) b.classList.toggle("on", (b.dataset.scene || null) === on && !!on);
 }
 
 // Short messages from the app itself: clip saved, hotkey pressed, problems.
