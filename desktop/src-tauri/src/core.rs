@@ -130,6 +130,8 @@ pub struct Core {
     hotkeys: Mutex<Option<Arc<Hotkeys>>>,
     /// Plain-language warnings about chosen devices that are not connected.
     device_warnings: Mutex<Vec<String>>,
+    /// End timestamp of the last audio chunk sent out (see `audio_in_order`).
+    audio_end: Mutex<Option<i64>>,
 }
 
 impl Core {
@@ -162,6 +164,7 @@ impl Core {
             prefs: Mutex::new(prefs),
             hotkeys: Mutex::new(None),
             device_warnings: Mutex::new(Vec::new()),
+            audio_end: Mutex::new(None),
         });
 
         // Global hotkeys (work while the game has focus).
@@ -796,6 +799,12 @@ impl Core {
 
     /// Hands media to the recorder and live streams (never blocks).
     fn dispatch(&self, m: Media) {
+        if let Media::Audio { pts, pcm } = &m {
+            let mut end = self.audio_end.lock().unwrap();
+            if !audio_in_order(&mut end, *pts, pcm.len()) {
+                return;
+            }
+        }
         self.replay.lock().unwrap().push(&m);
         let mut want_key = false;
         {
@@ -1354,4 +1363,36 @@ pub fn lan_ip() -> Option<String> {
     let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     s.connect("8.8.8.8:80").ok()?;
     Some(s.local_addr().ok()?.ip().to_string())
+}
+
+/// Keeps audio timestamps moving forward. A chunk that starts more than half
+/// a chunk before the previous one ended would overlap it: players and
+/// encoders turn that into audible breaks, so it is dropped. A jump back of
+/// over 2 s is a new timeline (phone reconnected) and is accepted.
+fn audio_in_order(end: &mut Option<i64>, pts: i64, bytes: usize) -> bool {
+    let dur = (bytes / 4) as i64 * 1_000_000 / 48_000;
+    if let Some(e) = *end {
+        if pts + dur / 2 < e && e - pts < 2_000_000 {
+            return false;
+        }
+    }
+    *end = Some(pts + dur);
+    true
+}
+
+#[cfg(test)]
+mod audio_order_tests {
+    use super::audio_in_order;
+
+    #[test]
+    fn drops_overlapping_chunks_but_accepts_new_timeline() {
+        let mut e = None;
+        assert!(audio_in_order(&mut e, 5_000_000, 1920)); // 10 ms
+        assert!(audio_in_order(&mut e, 5_010_000, 1920));
+        assert!(audio_in_order(&mut e, 5_340_000, 1920)); // jumped ahead
+        assert!(!audio_in_order(&mut e, 5_020_000, 1920)); // behind: dropped
+        assert!(audio_in_order(&mut e, 5_350_000, 1920));
+        assert!(audio_in_order(&mut e, 100_000, 1920)); // reconnect: new timeline
+        assert!(audio_in_order(&mut e, 110_000, 1920));
+    }
 }

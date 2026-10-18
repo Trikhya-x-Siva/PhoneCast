@@ -154,6 +154,9 @@ struct AiTap {
     acc: f32,
 }
 
+/// How long phone game audio may pause before Discord + mic flow on their own.
+pub const GAME_AUDIO_TIMEOUT: Duration = Duration::from_millis(1000);
+
 pub struct Mixer {
     state: Mutex<State>,
 }
@@ -212,10 +215,17 @@ impl Mixer {
     /// Produces one 10 ms mix when the phone is not supplying game audio:
     /// PC sound in PC mode, silence otherwise (Discord + mic still flow).
     /// Returns None while phone game audio is flowing.
+    ///
+    /// Phone audio arrives over USB in bursts that are often 150–350 ms late
+    /// (it queues behind large video frames). A 150 ms limit made this
+    /// stand-in kick in 250 times in 5 minutes: its chunks were stamped on
+    /// the PC's grid, ~330 ms ahead of the phone's, so the stream's audio
+    /// jumped forward and back and broke up (voice included). Only a real
+    /// stop of the phone's audio (over 1 s) switches to the stand-in now.
     pub fn mix_without_game(&self) -> Option<Vec<u8>> {
         let mut s = self.state.lock().unwrap();
         if s.last_game_audio
-            .is_some_and(|t| t.elapsed() < Duration::from_millis(150))
+            .is_some_and(|t| t.elapsed() < GAME_AUDIO_TIMEOUT)
         {
             return None;
         }
