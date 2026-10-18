@@ -7,7 +7,7 @@
 //! Destinations are independent: if one drops, it reconnects on its own and
 //! the other keeps going.
 
-use crate::adapt::{mbps_text, Adapt, Change};
+use crate::adapt::{Adapt, Change, Rung, SpeedMeter};
 use crate::capture::PcVideo;
 use crate::mkv::{MkvWriter, VideoConfig};
 use crate::sinks::{Media, Push, SinkTx};
@@ -150,6 +150,45 @@ const TWITCH: &[Preset] = &[
 
 fn preset(list: &'static [Preset], id: &str) -> &'static Preset {
     list.iter().find(|p| p.id == id).unwrap_or(&list[0])
+}
+
+// Dynamic bitrate: the rungs a destination may drop to when its upload
+// struggles, highest first. YouTube keeps 1440p (and its sharper VP9
+// re-encode) at 14 Mbps before giving up resolution; Twitch follows its own
+// guidance for slower connections.
+const YOUTUBE_LADDER: &[Rung] = &[
+    Rung {
+        w: 2560,
+        h: 1440,
+        kbps: 14_000,
+    },
+    Rung {
+        w: 1920,
+        h: 1080,
+        kbps: 9_000,
+    },
+];
+
+const TWITCH_LADDER: &[Rung] = &[
+    Rung {
+        w: 1664,
+        h: 936,
+        kbps: 4_500,
+    },
+    Rung {
+        w: 1280,
+        h: 720,
+        kbps: 3_500,
+    },
+];
+
+/// The rungs below the chosen preset: never larger, always a lower bitrate.
+fn fallback(ladder: &[Rung], p: &Preset) -> Vec<Rung> {
+    ladder
+        .iter()
+        .filter(|r| r.h <= p.h && r.kbps < p.kbps)
+        .copied()
+        .collect()
 }
 
 // ---------------- encoders ----------------
@@ -318,7 +357,23 @@ pub struct DestStatus {
     since: Option<Instant>,
     pub seconds: u64,
     pub reconnects: u32,
+    /// The chosen preset, e.g. "1440p60".
     pub quality: String,
+    /// What is being sent right now, e.g. "1080p60" (dynamic bitrate).
+    #[serde(rename = "qualityNow")]
+    pub quality_now: String,
+    /// Output speed over the last few seconds (FFmpeg's own `speed` field is
+    /// an average since start and reacts far too slowly).
+    #[serde(skip)]
+    recent_speed: Option<f64>,
+    /// When FFmpeg last reported progress; a long silence means it is stuck
+    /// writing to a congested connection.
+    #[serde(skip)]
+    progress_at: Option<Instant>,
+    /// Which FFmpeg process the stats belong to (a restarted one bumps it,
+    /// so the old process's last lines cannot overwrite fresh stats).
+    #[serde(skip)]
+    gen: u64,
     /// Bitrate the encoder is set to right now (dynamic bitrate may lower it).
     #[serde(rename = "kbpsNow")]
     pub kbps_now: u32,
@@ -345,7 +400,11 @@ impl DestStatus {
             since: None,
             seconds: 0,
             reconnects: 0,
+            quality_now: quality.clone(),
             quality,
+            recent_speed: None,
+            progress_at: None,
+            gen: 0,
             kbps_now: kbps,
             kbps_base: kbps,
             health: "good",
@@ -515,14 +574,20 @@ impl Live {
                 return Err(format!("Add your {name} stream key first"));
             }
             let key = dpapi::unprotect(&d.key_enc)?;
-            plans.push((id, name, preset(list, &d.quality), format!("{url}{key}")));
+            let p = preset(list, &d.quality);
+            let ladder = if id == "youtube" {
+                YOUTUBE_LADDER
+            } else {
+                TWITCH_LADDER
+            };
+            plans.push((id, name, p, format!("{url}{key}"), fallback(ladder, p)));
         }
         if plans.is_empty() {
             return Err("Turn on YouTube or Twitch first".into());
         }
 
         let mut dests = self.dests.lock().unwrap();
-        for (id, name, p, url) in plans {
+        for (id, name, p, url, lower) in plans {
             let status = Arc::new(Mutex::new(DestStatus::new(id, name, p.id.into(), p.kbps)));
             let stop = Arc::new(AtomicBool::new(false));
             // ~15 s of buffer (video + 10 ms audio packets): rides out upload and
@@ -543,6 +608,7 @@ impl Live {
                 framing: Framing::parse(&s.framing),
                 pc: pc.clone(),
                 file: false,
+                fallback: lower,
             };
             let (st, sp, rk, cfg) = (
                 status.clone(),
@@ -639,6 +705,9 @@ pub struct Job {
     pub pc: Option<Arc<PcVideo>>,
     /// Record to an MKV file (visually lossless) instead of streaming.
     pub file: bool,
+    /// Lower qualities dynamic bitrate may switch to while the upload
+    /// struggles (empty = always the chosen quality).
+    pub fallback: Vec<Rung>,
 }
 
 /// Runs a job on its own thread fed by the returned sender. Used by Go live
@@ -666,13 +735,22 @@ pub fn spawn_job(
 }
 
 impl Job {
-    /// FFmpeg arguments for this job at `kbps` (the chosen quality's bitrate,
-    /// or a lower one while dynamic bitrate is active).
-    fn args(&self, kbps: u32) -> Vec<String> {
-        if let Some(pc) = &self.pc {
-            return self.pc_args(pc, kbps);
+    /// The chosen quality as a ladder rung.
+    fn top(&self) -> Rung {
+        Rung {
+            w: self.w,
+            h: self.h,
+            kbps: self.kbps,
         }
-        let (w, h) = (self.w, self.h);
+    }
+
+    /// FFmpeg arguments for this job at rung `r` (the chosen quality, or a
+    /// lower one while dynamic bitrate is active). The framing never changes.
+    fn args(&self, r: Rung) -> Vec<String> {
+        if let Some(pc) = &self.pc {
+            return self.pc_args(pc, r);
+        }
+        let (w, h, kbps) = (r.w, r.h, r.kbps);
         let nvidia = self.encoder.contains("nvenc");
         let (hwaccel, filters) = video_filter(nvidia, self.framing, w, h);
         let mut a: Vec<String> = [
@@ -723,7 +801,7 @@ impl Job {
 
     /// PC screen mode: FFmpeg captures the monitor (and webcam) itself;
     /// the mixed audio arrives as raw PCM on stdin.
-    fn pc_args(&self, pc: &PcVideo, kbps: u32) -> Vec<String> {
+    fn pc_args(&self, pc: &PcVideo, r: Rung) -> Vec<String> {
         let mut a: Vec<String> = [
             "-hide_banner",
             "-y",
@@ -753,7 +831,7 @@ impl Job {
                 .iter()
                 .map(|s| s.to_string()),
         );
-        a.extend(pc.filter(self.w, self.h));
+        a.extend(pc.filter(r.w, r.h));
         a.extend(["-map".into(), format!("{audio_idx}:a")]);
         if self.file {
             // Visually lossless recording: quality-based rate control.
@@ -777,7 +855,7 @@ impl Job {
                 );
             }
         } else {
-            a.extend(encoder_args(&self.encoder, kbps, self.hevc, self.w >= 3840));
+            a.extend(encoder_args(&self.encoder, r.kbps, self.hevc, r.w >= 3840));
         }
         a.extend(self.output_args());
         a
@@ -815,9 +893,9 @@ impl Job {
         a
     }
 
-    fn spawn(&self, kbps: u32) -> std::io::Result<Child> {
+    fn spawn(&self, r: Rung) -> std::io::Result<Child> {
         let mut cmd = Command::new(&self.ffmpeg);
-        cmd.args(self.args(kbps))
+        cmd.args(self.args(r))
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
@@ -847,13 +925,18 @@ impl Job {
             ),
         );
         // Dynamic bitrate: live outputs only (a recording has no upload).
-        let adaptive = !self.file && self.kbps > 0;
-        let mut adapt = Adapt::new(self.kbps);
+        let adaptive = !self.file && self.kbps > 0 && !self.fallback.is_empty();
+        let mut ladder = vec![self.top()];
+        if adaptive {
+            ladder.extend(self.fallback.iter().copied());
+        }
+        let mut adapt = Adapt::new(ladder);
         let mut adjusting = false;
         let mut attempt = 0u32;
+        let mut gen = 0u64;
         'outer: while !stop.load(Ordering::SeqCst) {
-            let kbps = adapt.kbps();
-            let mut child = match self.spawn(kbps) {
+            let rung = adapt.rung();
+            let mut child = match self.spawn(rung) {
                 Ok(c) => c,
                 Err(e) => {
                     set(&|s| {
@@ -864,8 +947,14 @@ impl Job {
                 }
             };
             adapt.restarted(Instant::now());
+            gen += 1;
             set(&|s| {
-                s.kbps_now = kbps;
+                s.gen = gen;
+                s.kbps_now = rung.kbps;
+                s.quality_now = format!("{}p60", rung.h);
+                s.recent_speed = None;
+                s.progress_at = None;
+                s.speed = 0.0;
                 s.state = if adjusting {
                     "adjusting".into()
                 } else if attempt == 0 {
@@ -875,7 +964,7 @@ impl Job {
                 };
             });
             adjusting = false;
-            watch_progress(child.stderr.take().unwrap(), status.clone());
+            watch_progress(child.stderr.take().unwrap(), status.clone(), gen);
             let stdin = BufWriter::with_capacity(1 << 20, child.stdin.take().unwrap());
             let mut writer = if self.pc.is_some() {
                 Some(Feed::Pcm(stdin))
@@ -895,31 +984,48 @@ impl Job {
                 if stop.load(Ordering::SeqCst) {
                     break;
                 }
-                // Upload health, twice a second: step the bitrate down when the
-                // upload struggles, back up once it has been smooth for a minute.
+                // Upload health, twice a second: step down when the upload
+                // struggles, back up once it has been smooth for a minute.
                 if adaptive && last_check.elapsed() >= Duration::from_millis(500) {
                     let now = Instant::now();
                     last_check = now;
-                    let (speed, dropped, on_air) = {
+                    let (speed, on_air) = {
                         let s = status.lock().unwrap();
-                        (s.speed, s.dropped, s.state == "live")
+                        // No progress report for a while: FFmpeg is stuck
+                        // writing to the network, the clearest sign of all.
+                        let stalled = s.progress_at.is_some_and(|t| t.elapsed() > STALLED);
+                        (
+                            if stalled { Some(0.0) } else { s.recent_speed },
+                            s.state == "live",
+                        )
                     };
                     if on_air {
-                        if let Some(change) = adapt.observe(speed, dropped, now) {
+                        if let Some(change) = adapt.observe(speed, now) {
+                            let sp = speed.unwrap_or(0.0);
                             let (note, msg) = match change {
-                                Change::Down(k) => (
-                                    format!("Upload struggling → lowered to {}", mbps_text(k)),
+                                Change::Down(r) => (
+                                    format!("Upload struggling → lowered to {}", r.label()),
                                     format!(
-                                        "{name}: upload struggling (speed {speed:.2}x, {dropped} dropped) - lowering {kbps} → {k} kbps"
+                                        "{name}: upload struggling ({sp:.2}x for {} s) - lowering {} → {}",
+                                        crate::adapt::SLOW_FOR.as_secs(),
+                                        rung.label(),
+                                        r.label()
                                     ),
                                 ),
-                                Change::Up(k) if adapt.reduced() => (
-                                    format!("Upload recovering → raised to {}", mbps_text(k)),
-                                    format!("{name}: upload stable for 60 s - raising {kbps} → {k} kbps"),
+                                Change::Up(r) if adapt.reduced() => (
+                                    format!("Upload recovering → raised to {}", r.label()),
+                                    format!(
+                                        "{name}: upload stable for 60 s - raising {} → {}",
+                                        rung.label(),
+                                        r.label()
+                                    ),
                                 ),
-                                Change::Up(k) => (
-                                    "Upload recovered → back to full quality".to_string(),
-                                    format!("{name}: upload stable for 60 s - back to {k} kbps"),
+                                Change::Up(r) => (
+                                    format!("Upload recovered → back to {}", r.label()),
+                                    format!(
+                                        "{name}: upload stable for 60 s - back to {}",
+                                        r.label()
+                                    ),
                                 ),
                             };
                             crate::diag::log("live", msg);
@@ -980,8 +1086,8 @@ impl Job {
                 continue;
             }
             if restart_for_bitrate {
-                // Same connection settings, new bitrate; the other destination
-                // is untouched. Starts again on the next keyframe.
+                // Same connection and framing, new size/bitrate; the other
+                // destination is untouched. Starts again on the next keyframe.
                 adjusting = true;
                 set(&|s| s.state = "adjusting".into());
                 continue;
@@ -1046,21 +1152,33 @@ fn finish(child: &mut Child, w: Option<Feed>, graceful: bool) {
     child.wait().ok();
 }
 
+/// No progress report from FFmpeg for this long = stuck on the network.
+const STALLED: Duration = Duration::from_secs(3);
+
 /// Parses FFmpeg's `-progress` output into live stats; other lines are errors.
-fn watch_progress(stderr: std::process::ChildStderr, status: Arc<Mutex<DestStatus>>) {
+/// `gen` identifies this FFmpeg process; once the job restarts FFmpeg, the
+/// old process's remaining lines are ignored.
+fn watch_progress(stderr: std::process::ChildStderr, status: Arc<Mutex<DestStatus>>, gen: u64) {
     std::thread::spawn(move || {
         let mut last_frame = 0u64;
+        let mut meter = SpeedMeter::new(Duration::from_secs(3));
+        let mut out_us = 0i64;
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             let line = line.trim();
             let Some((k, v)) = line.split_once('=') else {
                 if !line.is_empty() {
                     let mut s = status.lock().unwrap();
                     crate::diag::log("live", format!("{}: ffmpeg: {line}", s.name));
-                    s.error = Some(friendly_error(line));
+                    if s.gen == gen {
+                        s.error = Some(friendly_error(line));
+                    }
                 }
                 continue;
             };
             let mut s = status.lock().unwrap();
+            if s.gen != gen {
+                continue;
+            }
             match k {
                 "frame" => {
                     let f: u64 = v.parse().unwrap_or(0);
@@ -1075,7 +1193,14 @@ fn watch_progress(stderr: std::process::ChildStderr, status: Arc<Mutex<DestStatu
                 "fps" => s.fps = v.parse().unwrap_or(0.0),
                 "bitrate" => s.kbps = v.trim_end_matches("kbits/s").trim().parse().unwrap_or(0.0),
                 "drop_frames" => s.dropped = v.parse().unwrap_or(0),
-                "speed" => s.speed = v.trim_end_matches('x').trim().parse().unwrap_or(0.0),
+                "out_time_us" => out_us = v.parse().unwrap_or(out_us),
+                // End of one report (once a second).
+                "progress" => {
+                    let now = Instant::now();
+                    s.progress_at = Some(now);
+                    s.recent_speed = meter.add(now, out_us);
+                    s.speed = s.recent_speed.unwrap_or(0.0);
+                }
                 _ => {}
             }
         }
@@ -1171,6 +1296,74 @@ fn friendly_error(line: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn ladders_start_below_the_chosen_preset() {
+        let r = |w, h, kbps| Rung { w, h, kbps };
+        assert_eq!(
+            fallback(YOUTUBE_LADDER, preset(YOUTUBE, "1440p60")),
+            vec![r(2560, 1440, 14_000), r(1920, 1080, 9_000)]
+        );
+        assert_eq!(
+            fallback(YOUTUBE_LADDER, preset(YOUTUBE, "1080p60")),
+            vec![r(1920, 1080, 9_000)]
+        );
+        assert_eq!(
+            fallback(TWITCH_LADDER, preset(TWITCH, "1080p60")),
+            vec![r(1664, 936, 4_500), r(1280, 720, 3_500)]
+        );
+        assert_eq!(
+            fallback(TWITCH_LADDER, preset(TWITCH, "720p60")),
+            vec![r(1280, 720, 3_500)]
+        );
+    }
+
+    #[test]
+    fn every_rung_keeps_the_framing() {
+        let top = preset(YOUTUBE, "1440p60");
+        for framing in [Framing::Blur, Framing::Fit, Framing::Fill] {
+            for nvenc in [true, false] {
+                let job = Job {
+                    ffmpeg: PathBuf::from("ffmpeg"),
+                    url: "rtmps://example.invalid/live".into(),
+                    encoder: if nvenc { "h264_nvenc" } else { "libx264" }.into(),
+                    w: top.w,
+                    h: top.h,
+                    kbps: top.kbps,
+                    hevc: false,
+                    framing,
+                    pc: None,
+                    file: false,
+                    fallback: fallback(YOUTUBE_LADDER, top),
+                };
+                let mut rungs = vec![job.top()];
+                rungs.extend(job.fallback.iter().copied());
+                let (_, want) = video_filter(nvenc, framing, 1, 1);
+                // The part of the graph that decides the framing.
+                let marker = match framing {
+                    Framing::Blur => "boxblur",
+                    Framing::Fit => "pad",
+                    Framing::Fill => "crop=",
+                };
+                assert!(want.contains(marker));
+                for r in rungs {
+                    let a = job.args(r).join(" ");
+                    assert!(a.contains(marker), "{framing:?} lost at {r:?}: {a}");
+                    assert!(
+                        a.contains(&format!("{}:{}", r.w, r.h))
+                            || a.contains(&format!("w={}:h={}", r.w, r.h)),
+                        "{a}"
+                    );
+                    assert!(a.contains(&format!("-b:v {}k", r.kbps)), "{a}");
+                    assert!(
+                        a.contains("-filter_complex") && a.contains("-map [v]"),
+                        "{a}"
+                    );
+                    assert!(!a.contains("nobuffer"), "{a}");
+                }
+            }
+        }
+    }
+
     /// End-to-end PC mode: FFmpeg captures the real screen, mixed PCM audio
     /// is piped in, GPU-encoded MKV comes out. Needs a display and FFmpeg.
     /// `cargo test pc_record_pipeline -- --ignored --nocapture`
@@ -1200,6 +1393,7 @@ mod tests {
             framing: Framing::Fit,
             pc: Some(pc),
             file: true,
+            fallback: Vec::new(),
         };
         let cfg = VideoConfig {
             codec: crate::mkv::CODEC_H264,
@@ -1286,6 +1480,7 @@ mod tests {
                 framing,
                 pc: None,
                 file: false,
+                fallback: Vec::new(),
             };
             let cfg = VideoConfig {
                 codec: crate::mkv::CODEC_H264,
@@ -1403,10 +1598,14 @@ mod throttle_tests {
             "testsrc2=size=1280x720:rate=60",
             "-t",
             "8",
+            // Noise makes the picture hard to compress, so the live encoder
+            // really sends the bitrate it is set to (like a busy game).
+            "-vf",
+            "noise=alls=24:allf=t",
             "-c:v",
             enc,
             "-b:v",
-            "6M",
+            "20M",
             "-g",
             "120",
             "-bf",
@@ -1452,20 +1651,25 @@ mod throttle_tests {
         let (csd, aus) = test_video(&ffmpeg, &enc.h264);
         println!("{} access units of test video", aus.len());
 
-        // Sink allows 55 % of the stream's bitrate (4 Mbps video + audio).
-        let limit = Arc::new(AtomicU64::new(4_200_000 / 8 * 55 / 100));
+        // The real YouTube setup: 1440p60 at 20 Mbps, blurred-background
+        // framing, its real ladder. The "upload" accepts 11 Mbps: too little
+        // for 20 or 14 Mbps, enough for 1080p60 at 9 Mbps.
+        let top = preset(YOUTUBE, "1440p60");
+        let lower = fallback(YOUTUBE_LADDER, top);
+        let limit = Arc::new(AtomicU64::new(11_000_000 / 8));
         let port = slow_sink(limit.clone());
         let job = Job {
             ffmpeg: ffmpeg.clone(),
             url: format!("tcp://127.0.0.1:{port}"),
             encoder: enc.h264.clone(),
-            w: 1280,
-            h: 720,
-            kbps: 4_000,
+            w: top.w,
+            h: top.h,
+            kbps: top.kbps,
             hevc: false,
-            fill: false,
+            framing: Framing::Blur,
             pc: None,
             file: false,
+            fallback: lower,
         };
         let cfg = VideoConfig {
             codec: crate::mkv::CODEC_H264,
@@ -1474,25 +1678,25 @@ mod throttle_tests {
             csd,
         };
         let status = Arc::new(Mutex::new(DestStatus::new(
-            "test",
-            "Test",
-            "720p60".into(),
-            4_000,
+            "youtube",
+            "YouTube",
+            top.id.into(),
+            top.kbps,
         )));
         let stop = Arc::new(AtomicBool::new(false));
-        let (mut tx, rx) = SinkTx::new(800);
+        let (mut tx, rx) = SinkTx::new(2400);
         let (st, sp) = (status.clone(), stop.clone());
         let t = std::thread::spawn(move || job.run(rx, cfg, Arc::new(|| {}), st, sp));
 
-        // Feed the 8 s loop in real time, watching the status.
+        // Feed the 8 s loop in real time, recording every quality change.
         let start = Instant::now();
         let mut i = 0i64;
         let mut audio_t = 0i64;
-        let mut stepped_down_at: Option<Duration> = None;
-        let mut stepped_up_at: Option<Duration> = None;
-        let mut lifted = false;
+        let mut changes: Vec<(Duration, u32, String, Option<String>)> = Vec::new();
+        let mut current = top.kbps;
+        let mut lifted_at: Option<Duration> = None;
         let mut last_print = Instant::now();
-        while start.elapsed() < Duration::from_secs(170) {
+        while start.elapsed() < Duration::from_secs(300) {
             let (key, au) = &aus[(i as usize) % aus.len()];
             let pts = 1_000_000 + i * 16_667;
             tx.push(&Media::Video {
@@ -1515,57 +1719,84 @@ mod throttle_tests {
             if last_print.elapsed() >= Duration::from_secs(5) {
                 last_print = Instant::now();
                 println!(
-                    "t={:>3}s state={} speed={:.2}x kbps_now={} health={} note={:?}",
+                    "t={:>3}s state={} speed={:.2}x now={} {} kbps health={}",
                     start.elapsed().as_secs(),
                     s.state,
                     s.speed,
+                    s.quality_now,
                     s.kbps_now,
-                    s.health,
+                    s.health
+                );
+            }
+            if s.kbps_now != current {
+                current = s.kbps_now;
+                println!(
+                    "t={:?}: {} at {} kbps - {:?}",
+                    start.elapsed(),
+                    s.quality_now,
+                    s.kbps_now,
                     s.note
                 );
-            }
-            if stepped_down_at.is_none() && s.kbps_now < 4_000 {
-                stepped_down_at = Some(start.elapsed());
-                println!(
-                    "stepped down to {} kbps after {:?}",
+                changes.push((
+                    start.elapsed(),
                     s.kbps_now,
-                    start.elapsed()
-                );
-                assert_eq!(s.health, "reduced");
-                assert!(s
-                    .note
-                    .as_deref()
-                    .unwrap_or("")
-                    .starts_with("Upload struggling"));
+                    s.quality_now.clone(),
+                    s.note.clone(),
+                ));
             }
-            // Lift the throttle once we are down to a rate the sink accepted,
-            // then expect a step back up after a stable minute.
-            if !lifted
-                && stepped_down_at.is_some_and(|d| start.elapsed() > d + Duration::from_secs(20))
+            // Once at the bottom rung, let it settle, then lift the throttle.
+            if lifted_at.is_none()
+                && changes.last().is_some_and(|c| {
+                    c.1 == 9_000 && start.elapsed() > c.0 + Duration::from_secs(15)
+                })
             {
-                lifted = true;
+                lifted_at = Some(start.elapsed());
                 limit.store(u64::MAX, Ordering::SeqCst);
                 println!("throttle lifted at {:?}", start.elapsed());
             }
-            if lifted
-                && stepped_up_at.is_none()
-                && s.note
-                    .as_deref()
-                    .is_some_and(|n| n.contains("raised") || n.contains("recovered"))
-            {
-                stepped_up_at = Some(start.elapsed());
-                println!("stepped back up at {:?}: {:?}", start.elapsed(), s.note);
-                break;
+            if lifted_at.is_some() && current > 9_000 {
+                break; // stepped back up
             }
         }
         stop.store(true, Ordering::SeqCst);
         drop(tx);
         t.join().unwrap();
-        let down = stepped_down_at.expect("bitrate never stepped down on a slow upload");
-        assert!(down < Duration::from_secs(45), "step-down took {down:?}");
+
+        let kbps: Vec<u32> = changes.iter().map(|c| c.1).collect();
         assert!(
-            stepped_up_at.is_some(),
-            "bitrate never stepped back up after the upload recovered"
+            kbps.starts_with(&[14_000, 9_000, 14_000]),
+            "quality changes: {changes:?}"
+        );
+        let (down1, _, q1, n1) = &changes[0];
+        let (down2, _, q2, n2) = &changes[1];
+        let (up, _, q3, n3) = &changes[2];
+        assert!(
+            *down1 < Duration::from_secs(45),
+            "first step-down took {down1:?}"
+        );
+        assert_eq!(q1, "1440p60");
+        assert_eq!(
+            n1.as_deref(),
+            Some("Upload struggling → lowered to 1440p60 · 14.0 Mbps")
+        );
+        // Never more than one restart a minute (one progress check of slack).
+        assert!(
+            *down2 - *down1 >= Duration::from_millis(59_500),
+            "{down1:?} → {down2:?}"
+        );
+        assert_eq!(q2, "1080p60");
+        assert_eq!(
+            n2.as_deref(),
+            Some("Upload struggling → lowered to 1080p60 · 9.0 Mbps")
+        );
+        assert!(
+            *up - *down2 >= Duration::from_millis(59_500),
+            "{down2:?} → {up:?}"
+        );
+        assert_eq!(q3, "1440p60");
+        assert_eq!(
+            n3.as_deref(),
+            Some("Upload recovering → raised to 1440p60 · 14.0 Mbps")
         );
     }
 }

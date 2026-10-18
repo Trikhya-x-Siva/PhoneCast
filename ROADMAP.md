@@ -52,8 +52,9 @@ The most-requested capture features, built on GPU-only paths:
 ## v0.3 — reliability and streamer tools
 Done so far (see CHANGELOG):
 - ✅ **Dynamic bitrate** on upload congestion with a visible health indicator
-  (Streamlabs' most-marketed feature; OBS hides it). Per destination:
-  −20 % after 3 s of struggle, back up after a stable minute.
+  (Streamlabs' most-marketed feature; OBS hides it). Per destination, a
+  short quality ladder: down after 5 s below 0.95x, up after a stable
+  minute, at most one restart a minute.
 - ✅ **Replay buffer / instant clips**: Ctrl+Shift+F8/F9/F10 save the last
   15 / 30 / 60 s from an in-memory buffer (OBS idea #263) as MP4 without
   re-encoding. Still to do: send a clip to the phone for Shorts/TikTok.

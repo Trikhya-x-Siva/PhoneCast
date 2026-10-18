@@ -385,10 +385,10 @@ function renderLive(l) {
       const reduced = d.health === "reduced";
       const mb = (k) => (k / 1000).toFixed(1);
       const meta = d.state === "live"
-        ? `${mb(d.kbps)} Mbps · ${Math.round(d.fps)} fps · ${d.quality}${reduced ? ` · set to ${mb(d.kbpsNow)} of ${mb(d.kbpsBase)} Mbps` : ""}${d.dropped ? ` · ${d.dropped} dropped` : ""}`
-        : d.state === "adjusting" ? `Restarting at ${mb(d.kbpsNow)} Mbps`
+        ? `${mb(d.kbps)} Mbps · ${Math.round(d.fps)} fps · ${reduced ? `${d.qualityNow} (chosen: ${d.quality})` : d.quality}${d.dropped ? ` · ${d.dropped} dropped` : ""}`
+        : d.state === "adjusting" ? `Restarting at ${d.qualityNow} · ${mb(d.kbpsNow)} Mbps`
         : d.reconnects ? `Reconnect attempt ${d.reconnects}` : `Starting ${d.quality}`;
-      const slow = d.state === "live" && d.speed > 0 && d.speed < 0.97;
+      const slow = d.state === "live" && d.speed > 0 && d.speed < 0.95;
       const note = slow ? `<span class="note reduced">Upload struggling (${d.speed.toFixed(2)}x) — lowering quality if it continues</span>`
         : d.note ? `<span class="note ${reduced ? "reduced" : "good"}">${escapeHtml(d.note)}</span>` : "";
       return `<div class="ldest">${DEST_ICON[d.id] || ""}<b>${d.name}</b>

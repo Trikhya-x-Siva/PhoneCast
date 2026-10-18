@@ -23,11 +23,15 @@ versions follow [SemVer](https://semver.org).
 - **Global hotkeys** that work while the game has focus: clips, mute mic
   (Ctrl+Shift+M), record (Ctrl+Shift+R), go live / end (Ctrl+Shift+L).
   A Hotkeys sheet rebinds them; conflicts with other apps are reported.
-- **Dynamic bitrate**: when a live upload struggles (FFmpeg output speed
-  below 0.97x for 3 s, or dropped frames) that destination's bitrate drops
-  by 20 % and it restarts on the next keyframe while the other destination
-  keeps streaming; after 60 s of smooth upload it steps back up. The Live
-  card and the diagnostics log say "Upload struggling → lowered to X Mbps".
+- **Dynamic bitrate**: when a live upload struggles (output below 0.95x
+  real time for 5 s, measured over the last few seconds) that destination
+  steps down its own ladder — YouTube 1440p60 20 Mbps → 1440p60 14 Mbps →
+  1080p60 9 Mbps; Twitch → 936p60 4.5 Mbps → 720p60 3.5 Mbps — restarting on
+  the next keyframe with the same framing while the other destination keeps
+  streaming. After 60 s of smooth upload it steps back up one rung. At most
+  one change a minute, since each restart is a short glitch for viewers.
+  The Live card and the diagnostics log say "Upload struggling → lowered to
+  1440p60 · 14.0 Mbps".
 - **Settings that survive device changes**: mic (by Windows endpoint ID),
   Discord source, monitor (by hardware ID) and webcam (by name) are
   remembered in `%APPDATA%\PhoneCast\settings.json`. A missing device gets
