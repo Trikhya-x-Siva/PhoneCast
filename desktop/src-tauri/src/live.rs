@@ -351,7 +351,7 @@ impl Encoders {
 /// keyframes exactly every `gop_s` seconds, the platform's B-frame limit,
 /// profile/level, and global headers (needed so the fifo muxer can resend
 /// the codec header after a reconnect).
-fn encoder_args(enc: &str, pr: &Preset) -> Vec<String> {
+pub(crate) fn encoder_args(enc: &str, pr: &Preset) -> Vec<String> {
     let hevc = pr.codec == Codec::Hevc;
     let b = format!("{}k", pr.kbps);
     let gop = pr.gop_frames().to_string();
@@ -971,27 +971,35 @@ pub fn spawn_job(
     Dest { tx, status, stop }
 }
 
+/// A generic 60 fps preset (CBR, 2 s GOP, 2 B-frames, AAC 160 kbps) for
+/// outputs that are not tied to a platform: recordings, custom jobs and the
+/// engine's FFmpeg fallback.
+pub(crate) fn generic_preset(w: u32, h: u32, kbps: u32, hevc: bool) -> Preset {
+    Preset {
+        id: "custom",
+        label: "Custom",
+        codec: if hevc { Codec::Hevc } else { Codec::H264 },
+        w,
+        h,
+        fps: 60,
+        kbps,
+        gop_s: 2,
+        max_bframes: 2,
+        profile: "high",
+        level: None,
+        audio: presets::Audio {
+            rate: 48_000,
+            kbps: 160,
+            channels: 2,
+        },
+    }
+}
+
 impl Job {
     /// The preset this job encodes with.
     fn spec(&self) -> Preset {
-        self.preset.unwrap_or(Preset {
-            id: "custom",
-            label: "Custom",
-            codec: if self.hevc { Codec::Hevc } else { Codec::H264 },
-            w: self.w,
-            h: self.h,
-            fps: 60,
-            kbps: self.kbps,
-            gop_s: 2,
-            max_bframes: 2,
-            profile: "high",
-            level: None,
-            audio: presets::Audio {
-                rate: 48_000,
-                kbps: 160,
-                channels: 2,
-            },
-        })
+        self.preset
+            .unwrap_or_else(|| generic_preset(self.w, self.h, self.kbps, self.hevc))
     }
 
     fn args(&self) -> Vec<String> {
@@ -1442,7 +1450,7 @@ fn is_connection_error(msg: &str) -> bool {
 /// 1080p went out as 1920×1088 (and 720p as 736): platforms reject or
 /// rescale that. A final `scale_cuda=format=yuv420p` gives exact-size
 /// frames (checked by the `gpu_framing_sizes` test).
-fn video_filter(
+pub(crate) fn video_filter(
     nvidia: bool,
     framing: Framing,
     w: u32,

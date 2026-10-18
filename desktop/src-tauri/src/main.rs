@@ -8,6 +8,7 @@ mod capture;
 mod compositor;
 mod core;
 mod diag;
+mod engine;
 mod hotkeys;
 mod live;
 mod mkv;
