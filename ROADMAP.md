@@ -7,6 +7,31 @@ issue trackers and idea boards of OBS Studio, Streamlabs, scrcpy, Sunshine
 and Moonlight (October 2026), filtered through one rule: **everything must
 stay light and never stutter**.
 
+## The goal
+The benchmark one-stop, open-source app for streaming **and** recording,
+from a phone or a PC. Every change is judged against this list:
+
+1. **Best picture.** Sharpest quality each platform accepts, at the
+   platform's own recommended settings.
+2. **Steady frame rate.** A constant 60 fps with no stutter or choppiness,
+   whatever the game, the phone's heat or the PC's load.
+3. **Correct framing.** The whole picture is shown, never stretched, never
+   cropped by surprise.
+4. **Seamless connection.** The stream survives Wi-Fi hiccups and short
+   drops without viewers noticing, and never restarts to change quality.
+5. **Correct audio.** Game sound, Discord and mic are clean, balanced and in
+   sync with the picture.
+6. **Low, stable delay** from game to viewer.
+7. **Recording as good as the stream**, at the same time.
+8. **Light on the hardware.** Low CPU and GPU cost, with minimal phone heat
+   and battery drain.
+9. **No-mistake setup.** One-click setup and presets that cannot trigger
+   platform errors.
+10. **Honest health.** Live stats and a diagnostics log that say what is wrong
+    and how to fix it.
+11. **Private.** Stream keys stay encrypted on your PC. No accounts, no
+    telemetry.
+
 ## Guiding principles
 1. **Smooth first.** A steady 60 fps and clean audio beat any feature. Every
    output runs on its own thread; a slow disk or upload can never stall capture.
