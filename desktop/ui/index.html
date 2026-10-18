@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PhoneCast</title>
+  <title>OSSG — Open Source Streaming for Gaming</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -14,14 +14,14 @@
       <svg viewBox="0 0 108 108" class="logo" aria-hidden="true">
         <defs>
           <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#9b7bff"/><stop offset="1" stop-color="#5b3df5"/>
+            <stop offset="0" stop-color="#8b5cf6"/><stop offset="1" stop-color="#0e9fc4"/>
           </linearGradient>
         </defs>
         <rect width="108" height="108" rx="26" fill="url(#lg)"/>
         <path fill="#fff" fill-rule="evenodd" d="M38 24h26a6 6 0 0 1 6 6v48a6 6 0 0 1-6 6H38a6 6 0 0 1-6-6V30a6 6 0 0 1 6-6zm0 8v42h26V32z"/>
         <path class="waves" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" d="M76 40a18 18 0 0 1 0 28M84 34a28 28 0 0 1 0 40"/>
       </svg>
-      <span>Phone<b>Cast</b></span>
+      <span class="wordmark"><b>OSSG</b><small>Open Source Streaming for Gaming</small></span>
     </div>
 
     <div id="pill" class="pill">
@@ -34,11 +34,11 @@
       </button>
       <button id="folderBtn" class="btn ghost" title="Open recordings folder">
         <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-        Recordings
+        <span class="label">Recordings</span>
       </button>
       <button id="clipsBtn" class="btn ghost" title="Open clips folder">
         <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg>
-        Clips
+        <span class="label">Clips</span>
       </button>
       <button id="recBtn" class="btn rec" disabled>
         <span class="recdot"></span><span id="recText">Record</span>
@@ -63,9 +63,9 @@
           </div>
           <div class="steps">
             <h2>Connect your phone</h2>
-            <div class="step"><span>1</span><p><b>USB</b> — plug the phone in. PhoneCast sets everything up by itself.</p></div>
+            <div class="step"><span>1</span><p><b>USB</b> — plug the phone in. OSSG sets everything up by itself.</p></div>
             <div class="step"><span>2</span><p><b>Wi-Fi</b> — in the phone app choose Wi-Fi and enter <code id="wifiAddr">…</code></p></div>
-            <div class="step"><span>3</span><p>Open <b>PhoneCast</b> on the phone, tap <b>Start streaming</b>, then open your game.</p></div>
+            <div class="step"><span>3</span><p>Open <b>OSSG</b> on the phone, tap <b>Start streaming</b>, then open your game.</p></div>
           </div>
         </div>
 
@@ -265,7 +265,7 @@
               <span id="aiTwState" class="ai-state">&mdash;</span>
             </div>
             <div class="key-row"><input id="aiTwClientId" type="text" spellcheck="false" placeholder="Client ID of your Twitch app"><button id="aiTwLogin" class="mini">Log in to Twitch</button></div>
-            <p class="hint">One-time setup: at <b>dev.twitch.tv/console/apps</b> register an app (category Chat Bot, client type <b>Public</b>, OAuth redirect <b>http://localhost</b>) and paste its Client ID. Login happens in your browser with a code; PhoneCast never sees your password.</p>
+            <p class="hint">One-time setup: at <b>dev.twitch.tv/console/apps</b> register an app (category Chat Bot, client type <b>Public</b>, OAuth redirect <b>http://localhost</b>) and paste its Client ID. Login happens in your browser with a code; OSSG never sees your password.</p>
             <div class="ai-plat">
               <label class="switch"><input type="checkbox" id="aiYtEnabled"><span class="track"><span class="knob"></span></span>YouTube</label>
               <span id="aiYtState" class="ai-state">&mdash;</span>
@@ -314,7 +314,7 @@
           <span id="brValue" class="mono">50 Mbps</span>
         </label>
         <input id="bitrate" type="range" min="10" max="100" step="5" value="50" />
-        <p class="hint">USB: 50 Mbps is visually lossless. Wi-Fi: 15–30 Mbps; PhoneCast lowers it automatically if the network struggles.</p>
+        <p class="hint">USB: 50 Mbps is visually lossless. Wi-Fi: 15–30 Mbps; OSSG lowers it automatically if the network struggles.</p>
         <button id="keyBtn" class="btn ghost wide">Refresh picture</button>
         <button id="logBtn" class="btn ghost wide" title="Opens the log folder. Attach the log when reporting a problem.">Open diagnostics</button>
       </div>
@@ -328,7 +328,7 @@
         <button class="icon-btn" data-close title="Close"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
       </div>
       <p class="sheet-sub">Stream to one platform or several at once. Each gets settings that follow its official limits, encoded on <b id="encName">your GPU</b>. Star the <b>Main</b> one: it keeps full quality if your upload runs short.</p>
-      <div id="ffmpegMissing" class="warn-box hidden">FFmpeg isn't installed on this PC, so PhoneCast can't go live yet. Click <b>Setup check</b> below to install it.</div>
+      <div id="ffmpegMissing" class="warn-box hidden">FFmpeg isn't installed on this PC, so OSSG can't go live yet. Click <b>Setup check</b> below to install it.</div>
 
       <div id="destList" class="dest-list"></div>
       <div class="add-row"><span>Add a platform</span><div id="addDest" class="add-chips"></div></div>
@@ -414,7 +414,7 @@
         <button class="btn ghost" id="hotkeysReset">Reset to defaults</button>
         <button class="btn live" id="hotkeysSave">Save</button>
       </div>
-      <p class="fine">If a combination is already used by another app, PhoneCast says so and you can pick another.</p>
+      <p class="fine">If a combination is already used by another app, OSSG says so and you can pick another.</p>
     </div>
   </div>
 

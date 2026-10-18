@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Plain platform theme (no AndroidX): navy window, violet/cyan accents. -->
+    <style name="Theme.OSSG" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/ossg_bg</item>
+        <item name="android:statusBarColor">@color/ossg_bg</item>
+        <item name="android:navigationBarColor">@color/ossg_bg</item>
+        <item name="android:colorBackground">@color/ossg_bg</item>
+        <item name="android:colorAccent">@color/ossg_violet</item>
+        <item name="android:colorPrimary">@color/ossg_violet</item>
+        <item name="android:colorControlActivated">@color/ossg_violet</item>
+        <item name="android:colorControlHighlight">#338B5CF6</item>
+        <item name="android:textColorPrimary">@color/ossg_text</item>
+        <item name="android:textColorSecondary">@color/ossg_muted</item>
+        <item name="android:textColorHint">@color/ossg_muted</item>
+    </style>
+</resources>

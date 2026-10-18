@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- OSSG / PhantomBlitz palette (matches desktop/ui/style.css tokens) -->
+<resources>
+    <color name="ossg_bg">#070A14</color>
+    <color name="ossg_bg_2">#0B1022</color>
+    <color name="ossg_card">#11172E</color>
+    <color name="ossg_line">#222B4D</color>
+    <color name="ossg_text">#E8ECF8</color>
+    <color name="ossg_muted">#8E97B5</color>
+    <color name="ossg_violet">#8B5CF6</color>
+    <color name="ossg_cyan">#22D3EE</color>
+    <color name="ossg_live">#FF2D4B</color>
+    <color name="ossg_good">#34D399</color>
+</resources>
