@@ -14,14 +14,18 @@ use serde_json::{json, Value};
 #[serde(rename_all = "lowercase")]
 pub enum Platform {
     Youtube,
+    /// YouTube Dual stream's vertical (9:16) feed, sent with the "Vertical
+    /// stream key" next to the main YouTube stream (Encoder mode).
+    YoutubeVertical,
     Twitch,
     Kick,
     Facebook,
     Custom,
 }
 
-pub const PLATFORMS: [Platform; 5] = [
+pub const PLATFORMS: [Platform; 6] = [
     Platform::Youtube,
+    Platform::YoutubeVertical,
     Platform::Twitch,
     Platform::Kick,
     Platform::Facebook,
@@ -139,6 +143,54 @@ const P1080: (u32, u32, u32) = (1920, 1080, 60);
 const P936: (u32, u32, u32) = (1664, 936, 60);
 const P720: (u32, u32, u32) = (1280, 720, 60);
 const P2160: (u32, u32, u32) = (3840, 2160, 60);
+const V1920: (u32, u32, u32) = (1080, 1920, 60);
+const V1280: (u32, u32, u32) = (720, 1280, 60);
+
+// YouTube Dual stream, vertical feed (Shorts feed, phones held upright).
+// Lowered first when upload is short (the main stream keeps its quality).
+// Bitrates follow YouTube's 1080p60 / 720p60 rows (the same pixel counts).
+const YOUTUBE_VERTICAL: &[Preset] = &[
+    p(
+        "ytv-1080x1920-hevc",
+        "1080×1920 vertical HEVC · 12 Mbps",
+        Codec::Hevc,
+        V1920,
+        12_000,
+        "main",
+        None,
+        AAC_YT,
+    ),
+    p(
+        "ytv-720x1280-hevc",
+        "720×1280 vertical HEVC · 6 Mbps (recommended for most uploads)",
+        Codec::Hevc,
+        V1280,
+        6_000,
+        "main",
+        None,
+        AAC_YT,
+    ),
+    p(
+        "ytv-720x1280-hevc-lite",
+        "720×1280 vertical HEVC · 3 Mbps (slow upload)",
+        Codec::Hevc,
+        V1280,
+        3_000,
+        "main",
+        None,
+        AAC_YT,
+    ),
+    p(
+        "ytv-720x1280-h264",
+        "720×1280 vertical H.264 · 4 Mbps",
+        Codec::H264,
+        V1280,
+        4_000,
+        "high",
+        None,
+        AAC_YT,
+    ),
+];
 
 // Ordered best → lowest: "the next lower preset" is the next usable entry.
 // YouTube bitrates are at (never below) YouTube's recommended value for that
@@ -356,6 +408,7 @@ impl Platform {
     pub fn id(self) -> &'static str {
         match self {
             Platform::Youtube => "youtube",
+            Platform::YoutubeVertical => "ytvertical",
             Platform::Twitch => "twitch",
             Platform::Kick => "kick",
             Platform::Facebook => "facebook",
@@ -373,6 +426,7 @@ impl Platform {
     pub fn name(self) -> &'static str {
         match self {
             Platform::Youtube => "YouTube",
+            Platform::YoutubeVertical => "YouTube vertical",
             Platform::Twitch => "Twitch",
             Platform::Kick => "Kick",
             Platform::Facebook => "Facebook Gaming",
@@ -383,6 +437,7 @@ impl Platform {
     pub fn presets(self) -> &'static [Preset] {
         match self {
             Platform::Youtube => YOUTUBE,
+            Platform::YoutubeVertical => YOUTUBE_VERTICAL,
             Platform::Twitch => TWITCH,
             Platform::Kick => KICK,
             Platform::Facebook => FACEBOOK,
@@ -393,7 +448,9 @@ impl Platform {
     /// Server URL filled in for the streamer, if the platform has a fixed one.
     pub fn default_url(self) -> &'static str {
         match self {
-            Platform::Youtube => "rtmps://a.rtmps.youtube.com:443/live2",
+            Platform::Youtube | Platform::YoutubeVertical => {
+                "rtmps://a.rtmps.youtube.com:443/live2"
+            }
             Platform::Twitch => "rtmps://live.twitch.tv:443/app",
             Platform::Facebook => "rtmps://live-api-s.facebook.com:443/rtmp",
             Platform::Kick | Platform::Custom => "",
@@ -410,6 +467,7 @@ impl Platform {
     pub fn limits_text(self) -> &'static str {
         match self {
             Platform::Youtube => "H.264 or HEVC, CBR, keyframe every 2 s (max 4 s), max 2 B-frames, AAC stereo 128 kbps. 1440p60: HEVC 6–24 Mbps, H.264 8–34 Mbps. 1080p60: HEVC 4–12, H.264 6–17. 4K needs Normal latency.",
+            Platform::YoutubeVertical => "The vertical (9:16) half of YouTube Dual stream: the game across the middle, a blurred copy of it above and below, your banner under the game. YouTube waits for both streams before it starts. Lowered first when upload is short.",
             Platform::Twitch => "H.264 only, CBR, keyframe every 2 s, up to 1080p60 at 6 Mbps (7.5 Mbps max). AAC up to 160 kbps.",
             Platform::Kick => "H.264 Main profile only, CBR 1–8 Mbps, up to 1080p60, keyframe every 2 s, stereo audio up to 48 kHz.",
             Platform::Facebook => "H.264 (level 4.2 for 1080p60), 1080p60 4.5–9 Mbps, 720p 2.25–6 Mbps, keyframe every 2 s (max 4 s), AAC 128 kbps, 16:9.",
@@ -422,6 +480,9 @@ impl Platform {
         match self {
             Platform::Youtube => {
                 "studio.youtube.com → Create → Go live → Stream → copy Stream key."
+            }
+            Platform::YoutubeVertical => {
+                "YouTube Studio → Go live → Stream settings → turn on Dual stream → in the right-hand box pick Encoder → copy the Vertical stream key."
             }
             Platform::Twitch => {
                 "dashboard.twitch.tv → Settings → Stream → copy Primary Stream key."
@@ -461,6 +522,13 @@ impl Platform {
                 }
             }
             Platform::Custom => self.preset("c-1080p60"),
+            Platform::YoutubeVertical => {
+                if hevc {
+                    self.preset("ytv-720x1280-hevc")
+                } else {
+                    self.preset("ytv-720x1280-h264")
+                }
+            }
             _ => first_usable.unwrap_or(&list[0]),
         }
     }
@@ -551,7 +619,11 @@ pub fn check_preset(platform: Platform, pr: &Preset, dest: &str) -> Vec<Issue> {
     if pr.audio.channels != 2 {
         err(&mut out, "Stereo audio is required.".into());
     }
-    if pr.w * 9 != pr.h * 16 && platform != Platform::Custom {
+    if platform == Platform::YoutubeVertical {
+        if pr.w * 16 != pr.h * 9 {
+            err(&mut out, "The vertical stream must be 9:16.".into());
+        }
+    } else if pr.w * 9 != pr.h * 16 && platform != Platform::Custom {
         err(&mut out, format!("{name} expects a 16:9 picture."));
     }
     match platform {
@@ -597,6 +669,17 @@ pub fn check_preset(platform: Platform, pr: &Preset, dest: &str) -> Vec<Issue> {
             }
             if ![44_100, 48_000].contains(&pr.audio.rate) || pr.audio.kbps > 384 {
                 err(&mut out, "YouTube needs AAC at 44.1 or 48 kHz.".into());
+            }
+        }
+        Platform::YoutubeVertical => {
+            if ![44_100, 48_000].contains(&pr.audio.rate) || pr.audio.kbps > 384 {
+                err(&mut out, "YouTube needs AAC at 44.1 or 48 kHz.".into());
+            }
+            if pr.kbps < 1_500 {
+                err(
+                    &mut out,
+                    "The vertical stream needs at least 1.5 Mbps.".into(),
+                );
             }
         }
         Platform::Twitch => {
@@ -1267,6 +1350,21 @@ mod tests {
         assert!(p.can_start, "{:?}", p.issues);
         assert_eq!(p.chosen[0].preset, "tw-720p60");
         assert!(p.chosen[1].lowered);
+        assert!(p.total_kbps <= p.budget_kbps.unwrap());
+    }
+
+    #[test]
+    fn vertical_feed_shrinks_first_and_the_main_keeps_its_quality() {
+        let dests = [
+            d("yt", Platform::Youtube, "yt-1080p60-hevc", true),
+            d("v", Platform::YoutubeVertical, "ytv-720x1280-hevc", false),
+        ];
+        // The user's measured 22.8 Mbps: 70% = 16 Mbps for both.
+        let p = plan(&dests, Some(22.8), true);
+        assert!(p.can_start, "{:?}", p.issues);
+        assert_eq!(p.chosen[0].preset, "yt-1080p60-hevc");
+        assert!(!p.chosen[0].lowered);
+        assert_eq!(p.chosen[1].preset, "ytv-720x1280-hevc-lite");
         assert!(p.total_kbps <= p.budget_kbps.unwrap());
     }
 

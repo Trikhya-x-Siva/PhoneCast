@@ -11,9 +11,10 @@
   let plan = null;
   let checkTimer;
 
-  const PLATFORM_COLOR = { youtube: "#ff3d3d", twitch: "#9146ff", kick: "#53fc18", facebook: "#1877f2", custom: "#8b6cff" };
+  const PLATFORM_COLOR = { youtube: "#ff3d3d", ytvertical: "#ff3d3d", twitch: "#9146ff", kick: "#53fc18", facebook: "#1877f2", custom: "#8b6cff" };
   const ICON = {
     youtube: '<svg viewBox="0 0 24 24"><path d="M22 8.5a3 3 0 0 0-2.1-2.1C18 6 12 6 12 6s-6 0-7.9.4A3 3 0 0 0 2 8.5 31 31 0 0 0 2 12a31 31 0 0 0 .1 3.5 3 3 0 0 0 2 2.1C6 18 12 18 12 18s6 0 7.9-.4a3 3 0 0 0 2.1-2.1A31 31 0 0 0 22 12a31 31 0 0 0 0-3.5z"/><path d="m10 15 5-3-5-3z"/></svg>',
+    ytvertical: '<svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="m11 9.5 3 2.5-3 2.5z"/></svg>',
     twitch: '<svg viewBox="0 0 24 24"><path d="M21 2H3v16h5v4l4-4h5l4-4z"/><path d="M11 11V7M16 11V7"/></svg>',
     kick: '<svg viewBox="0 0 24 24"><path d="M5 3h5v6h2V6h3V3h4v6h-3v3h3v3h-3v3h3v3h-4v-3h-3v-3h-2v6H5z"/></svg>',
     facebook: '<svg viewBox="0 0 24 24"><path d="M15 3h-2a4 4 0 0 0-4 4v3H7v4h2v7h4v-7h3l1-4h-4V7a1 1 0 0 1 1-1h2z"/></svg>',

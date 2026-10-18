@@ -330,7 +330,7 @@ pub fn upload_speed_test(
 pub fn recommendations(min_mbps: f64, hevc: bool) -> Value {
     let per: Vec<Value> = presets::PLATFORMS
         .iter()
-        .filter(|p| **p != Platform::Custom)
+        .filter(|p| !matches!(**p, Platform::Custom | Platform::YoutubeVertical))
         .map(|p| {
             let r = presets::recommend(*p, min_mbps, hevc);
             json!({
