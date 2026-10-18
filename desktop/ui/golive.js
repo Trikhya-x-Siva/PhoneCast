@@ -209,6 +209,8 @@
     $("ffmpegMissing").classList.toggle("hidden", s.ffmpeg);
     $("encName").textContent = s.encoder || "your GPU";
     for (const x of $("framing").querySelectorAll("button")) x.classList.toggle("on", x.dataset.v === framing);
+    $("bannerEditor").classList.toggle("hidden", framing !== "banner");
+    drawBanner();
     render();
     scheduleCheck();
   }
@@ -250,8 +252,150 @@
     b.addEventListener("click", () => {
       framing = b.dataset.v;
       for (const x of $("framing").querySelectorAll("button")) x.classList.toggle("on", x === b);
+      showBannerEditor();
     });
   }
+
+  // ---------------- banner (strip under the game) ----------------
+  // Drawn here on a 1920-wide canvas in the strip's exact shape, saved as a
+  // PNG that the stream lays under the game. Re-saved shortly after each edit.
+  const bn = { title: "", line: "", right: "LIVE", color: "#8b6cff", logo: null, image: null };
+  let bnSaveTimer;
+  const canvas = $("bannerCanvas");
+
+  function stripHeight() {
+    // The phone picture's shape decides how tall the strip is at 1920x1080.
+    const v = window.lastStatus && window.lastStatus.video;
+    const long = v ? Math.max(v.width, v.height) : 2376;
+    const short = v ? Math.min(v.width, v.height) : 1080;
+    const gh = Math.round((1920 * short) / long / 2) * 2;
+    return Math.max(80, 1080 - gh);
+  }
+
+  function loadImage(src) {
+    return new Promise((ok, bad) => {
+      const i = new Image();
+      i.onload = () => ok(i);
+      i.onerror = bad;
+      i.src = src;
+    });
+  }
+
+  function drawBanner() {
+    const H = stripHeight();
+    if (canvas.height !== H) canvas.height = H;
+    const g = canvas.getContext("2d");
+    const W = canvas.width;
+    g.clearRect(0, 0, W, H);
+    if (bn.image) {
+      // Own image: cover the strip, centred.
+      const s = Math.max(W / bn.image.width, H / bn.image.height);
+      const iw = bn.image.width * s, ih = bn.image.height * s;
+      g.drawImage(bn.image, (W - iw) / 2, (H - ih) / 2, iw, ih);
+      return;
+    }
+    const bg = g.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, "#0d0f17");
+    bg.addColorStop(1, "#171b28");
+    g.fillStyle = bg;
+    g.fillRect(0, 0, W, H);
+    // Accent glow, and a top edge line that separates game and banner.
+    const glow = g.createRadialGradient(W * 0.18, H, 0, W * 0.18, H, W * 0.5);
+    glow.addColorStop(0, bn.color + "55");
+    glow.addColorStop(1, bn.color + "00");
+    g.fillStyle = glow;
+    g.fillRect(0, 0, W, H);
+    g.fillStyle = bn.color;
+    g.fillRect(0, 0, W, 4);
+    const pad = Math.round(H * 0.22);
+    let x = pad;
+    if (bn.logo) {
+      const d = H - pad * 2;
+      g.save();
+      g.beginPath();
+      g.arc(x + d / 2, H / 2 + 2, d / 2, 0, Math.PI * 2);
+      g.clip();
+      g.drawImage(bn.logo, x, H / 2 + 2 - d / 2, d, d);
+      g.restore();
+      g.strokeStyle = bn.color;
+      g.lineWidth = 4;
+      g.beginPath();
+      g.arc(x + d / 2, H / 2 + 2, d / 2, 0, Math.PI * 2);
+      g.stroke();
+      x += d + pad * 0.8;
+    }
+    g.textBaseline = "alphabetic";
+    g.fillStyle = "#f3f4fa";
+    g.font = `800 ${Math.round(H * 0.34)}px "Segoe UI", system-ui, sans-serif`;
+    g.fillText(bn.title || "Your channel name", x, H * 0.52);
+    g.fillStyle = "#aab0c4";
+    g.font = `600 ${Math.round(H * 0.18)}px "Segoe UI", system-ui, sans-serif`;
+    g.fillText(bn.line || "YT · IG · Discord: @yourname", x, H * 0.8);
+    if (bn.right) {
+      g.font = `800 ${Math.round(H * 0.2)}px "Segoe UI", system-ui, sans-serif`;
+      const tw = g.measureText(bn.right).width;
+      const ph = H * 0.36, pw = tw + ph * 1.1, px = W - pad - pw, py = H / 2 - ph / 2 + 2;
+      g.fillStyle = bn.color;
+      g.beginPath();
+      g.roundRect(px, py, pw, ph, ph / 2);
+      g.fill();
+      g.fillStyle = "#fff";
+      g.fillText(bn.right, px + (pw - tw) / 2, py + ph * 0.7);
+    }
+  }
+
+  function saveBannerSoon() {
+    drawBanner();
+    clearTimeout(bnSaveTimer);
+    bnSaveTimer = setTimeout(() => {
+      canvas.toBlob(async (blob) => {
+        if (!blob) return;
+        const png = Array.from(new Uint8Array(await blob.arrayBuffer()));
+        const spec = { title: bn.title, line: bn.line, right: bn.right, color: bn.color, logo: bn.logo ? bn.logo.src : null, image: bn.image ? bn.image.src : null };
+        invoke("save_banner", { png, spec }).catch((e) => toast(String(e)));
+      }, "image/png");
+    }, 400);
+  }
+
+  function showBannerEditor() {
+    $("bannerEditor").classList.toggle("hidden", framing !== "banner");
+    if (framing === "banner") saveBannerSoon();
+  }
+
+  for (const [id, key] of [["bnTitle", "title"], ["bnLine", "line"], ["bnRight", "right"], ["bnColor", "color"]]) {
+    $(id).addEventListener("input", (e) => {
+      bn[key] = e.target.value;
+      saveBannerSoon();
+    });
+  }
+  for (const [id, key] of [["bnLogo", "logo"], ["bnImage", "image"]]) {
+    $(id).addEventListener("change", (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const r = new FileReader();
+      r.onload = async () => {
+        try {
+          bn[key] = await loadImage(r.result);
+          saveBannerSoon();
+        } catch {
+          toast("Could not read that image");
+        }
+      };
+      r.readAsDataURL(f);
+    });
+  }
+
+  invoke("get_banner").then(async (s) => {
+    if (!s) return drawBanner();
+    Object.assign(bn, { title: s.title || "", line: s.line || "", right: s.right ?? "LIVE", color: s.color || "#8b6cff" });
+    if (s.logo) bn.logo = await loadImage(s.logo).catch(() => null);
+    if (s.image) bn.image = await loadImage(s.image).catch(() => null);
+    $("bnTitle").value = bn.title;
+    $("bnLine").value = bn.line;
+    $("bnRight").value = bn.right;
+    $("bnColor").value = bn.color;
+    drawBanner();
+  });
 
   window.openModal = () => {
     invoke("get_live_settings").then(fill);

@@ -30,6 +30,7 @@ class StreamClient(
         fun onSetBitrate(bps: Int)
         fun onKeyframeRequest()
         fun onStopRequest()
+        fun onSetMic(on: Boolean)
     }
 
     @Volatile var connected = false
@@ -193,6 +194,7 @@ class StreamClient(
                         queue.offerFirst(Packet(Protocol.PONG, 0, 0, reply))
                     }
                     Protocol.STOP -> listener.onStopRequest()
+                    Protocol.SET_MIC -> listener.onSetMic(payload.isNotEmpty() && payload[0].toInt() != 0)
                 }
             }
         } catch (_: Exception) {

@@ -138,10 +138,6 @@
           <button data-v="phone"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>Phone</button>
           <button data-v="screen"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>This PC</button>
         </div>
-        <div id="phoneOptions" class="pc-options">
-          <label class="switch" style="margin:10px 0 6px"><input type="checkbox" id="gameModeToggle"><span class="track"><span class="knob"></span></span>16:9 game mode (experimental)</label>
-          <p id="gameModeHint" class="hint">Makes the phone's screen 16:9 while streaming over USB, so the game fills the stream. Some phones (OnePlus) stretch the picture on the phone itself while it is on: if yours does, leave this off. Your phone's own setting comes back when you stop.</p>
-        </div>
         <div id="pcOptions" class="pc-options hidden">
           <label class="field"><span>Capture</span>
             <div class="key-row"><select id="captureSelect"></select><button id="refreshWindows" class="mini" title="Refresh the list of open windows">&#x21bb;</button></div>
@@ -330,11 +326,24 @@
       <div class="framing">
         <span>Picture</span>
         <div class="seg" id="framing">
+          <button data-v="banner" title="16:9 like other streamers: the whole game full width on top, nothing cut or stretched, and your banner in the strip below">Game + banner</button>
           <button data-v="phone" title="Exactly your phone screen: the stream takes the phone's own wide shape (2376×1080 at 1080p). No bars, blur, crop or stretch. Phone viewers see it full screen. YouTube and custom servers only; Twitch, Kick and Facebook get the blurred 16:9 picture">Phone shape</button>
           <button data-v="blur" title="Whole game screen, nothing cut, no stretching. The space above and below is filled with a soft blurred copy of the game (what most mobile streamers use)">Blurred background</button>
           <button data-v="fit" title="Whole game screen with black bars above and below">Black bars</button>
           <button data-v="fill" title="Fills the frame but trims the sides, so edge buttons and the map can be cut">Crop sides</button>
         </div>
+      </div>
+      <div id="bannerEditor" class="banner-editor hidden">
+        <canvas id="bannerCanvas" width="1920" height="208" aria-label="Banner preview"></canvas>
+        <div class="banner-fields">
+          <label class="field"><span>Channel name</span><input id="bnTitle" maxlength="40" placeholder="Your channel name"></label>
+          <label class="field"><span>Second line</span><input id="bnLine" maxlength="80" placeholder="YT · IG · Discord: @yourname"></label>
+          <label class="field"><span>Right side</span><input id="bnRight" maxlength="30" placeholder="e.g. BGMI LIVE"></label>
+          <label class="field bn-color"><span>Colour</span><input id="bnColor" type="color" value="#8b6cff"></label>
+          <label class="field"><span>Logo (optional)</span><input id="bnLogo" type="file" accept="image/png,image/jpeg,image/webp"></label>
+          <label class="field"><span>Or your own banner image</span><input id="bnImage" type="file" accept="image/png,image/jpeg,image/webp"></label>
+        </div>
+        <p class="hint">Shown under the game while you stream. Saved on this PC; YouTube needs no setup for it.</p>
       </div>
 
       <div class="sheet-foot">

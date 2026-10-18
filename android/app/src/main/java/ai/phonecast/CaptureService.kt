@@ -42,6 +42,7 @@ class CaptureService : Service(), StreamClient.Listener {
     @Volatile private var encoder: VideoEncoder? = null
     private var pacer: FramePacer? = null
     private var audio: AudioCapture? = null
+    private var mic: MicCapture? = null
     private var client: StreamClient? = null
     private var wifiLock: WifiManager.WifiLock? = null
 
@@ -75,7 +76,14 @@ class CaptureService : Service(), StreamClient.Listener {
         // Android 14+: must be in the foreground before using the projection token.
         startForeground(
             NOTIFICATION_ID, buildNotification("Starting…"),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            if (Build.VERSION.SDK_INT >= 30) {
+                // Microphone too, so "Phone mic" can be switched on from the
+                // PC later, while the game is in front.
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            }
         )
 
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
@@ -375,7 +383,7 @@ class CaptureService : Service(), StreamClient.Listener {
 
     override fun onConnected() {
         worker.post {
-            encoder?.requestKeyframe()
+            encoder?.requestKeyframe(force = true)
             status = "PC connected"
             updateNotification()
         }
@@ -407,6 +415,19 @@ class CaptureService : Service(), StreamClient.Listener {
 
     override fun onKeyframeRequest() {
         worker.post { encoder?.requestKeyframe() }
+    }
+
+    override fun onSetMic(on: Boolean) {
+        worker.post {
+            val c = client ?: return@post
+            if (on && mic == null) {
+                mic = runCatching { MicCapture { c.send(it) } }
+                    .onFailure { Log.e(TAG, "phone mic unavailable", it) }.getOrNull()
+            } else if (!on) {
+                mic?.stop()
+                mic = null
+            }
+        }
     }
 
     override fun onStopRequest() {
@@ -454,6 +475,7 @@ class CaptureService : Service(), StreamClient.Listener {
         }
         client?.close()
         audio?.stop()
+        mic?.stop()
         virtualDisplay?.release()
         pacer?.release()
         encoder?.stop()

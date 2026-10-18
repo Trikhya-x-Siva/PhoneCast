@@ -136,6 +136,10 @@ struct State {
     ducking: bool,
     duck: f32,
     limiter: f32,
+    /// Last chunk from the phone's mic.
+    phone_mic_at: Option<Instant>,
+    /// Voice leveler gain for the mic (see `level_voice`).
+    voice_gain: f32,
     last_game_audio: Option<Instant>,
     /// Optional tap for the local AI helper: peak levels since the last
     /// take and, when `ai_pcm` is on, the mix as 16 kHz mono.
@@ -153,6 +157,9 @@ struct AiTap {
     phase: u8,
     acc: f32,
 }
+
+/// Mic device id meaning "the phone's own mic" (sent by the phone app).
+pub const PHONE_MIC: &str = "phone";
 
 /// How long phone game audio may pause before Discord + mic flow on their own.
 pub const GAME_AUDIO_TIMEOUT: Duration = Duration::from_millis(1000);
@@ -183,6 +190,8 @@ impl Mixer {
                 ducking: false,
                 duck: 1.0,
                 limiter: 1.0,
+                phone_mic_at: None,
+                voice_gain: 2.0,
                 last_game_audio: None,
                 ai_tap: AiTap::default(),
             }),
@@ -264,7 +273,8 @@ impl Mixer {
             v
         };
         let discord = take(&mut s.discord);
-        let mic = take(&mut s.mic);
+        let mut mic = take(&mut s.mic);
+        level_voice(&mut s.voice_gain, &mut mic);
 
         let (gg, gd, gm) = (
             s.game.effective_gain(),
@@ -352,6 +362,36 @@ impl Mixer {
         };
         s.mic_missing = false;
         s.mic_generation += 1;
+    }
+
+    /// True when the phone's own mic is the chosen mic.
+    pub fn uses_phone_mic(&self) -> bool {
+        self.state.lock().unwrap().mic_device.as_deref() == Some(PHONE_MIC)
+    }
+
+    /// One chunk of the phone's mic (s16le stereo, 48 kHz), sent by the phone
+    /// app while "Phone mic" is chosen. Kept to at most 0.3 s queued, so the
+    /// voice never drifts behind the game.
+    pub fn push_phone_mic(&self, pcm: &[u8]) {
+        let mut s = self.state.lock().unwrap();
+        if s.mic_device.as_deref() != Some(PHONE_MIC) {
+            return;
+        }
+        let v: Vec<f32> = pcm
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| i16::from_le_bytes(*b) as f32 / 32768.0)
+            .collect();
+        s.mic.push(&v);
+        let max = 48_000 * 2 * 3 / 10;
+        if s.mic.fifo.len() > max {
+            let extra = s.mic.fifo.len() - max;
+            s.mic.fifo.drain(..extra);
+        }
+        s.mic.active = true;
+        s.mic.status = "Phone mic".into();
+        s.phone_mic_at = Some(Instant::now());
     }
 
     /// The chosen mic as (id, name), for saving.
@@ -646,6 +686,26 @@ mod capture {
                 initialize_mta().ok().ok();
                 loop {
                     refresh_devices(&mixer);
+                    if mixer.uses_phone_mic() {
+                        // Audio comes from the phone over USB/Wi-Fi instead.
+                        let generation = mixer.with(|s| s.mic_generation);
+                        mixer.with(|s| s.mic_missing = false);
+                        while mixer.with(|s| s.mic_generation) == generation {
+                            mixer.with(|s| {
+                                let live = s
+                                    .phone_mic_at
+                                    .is_some_and(|t| t.elapsed() < Duration::from_millis(500));
+                                if !live {
+                                    s.mic.active = false;
+                                    s.mic.status =
+                                        "Phone mic: waiting for the phone (start streaming on it)"
+                                            .into();
+                                }
+                            });
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                        continue;
+                    }
                     let (generation, device, missing_name) = mixer.with(|s| {
                         let missing = s
                             .mic_device
@@ -899,5 +959,65 @@ mod capture {
         mine.iter()
             .find(|p| !mine.iter().any(|q| q.0 == p.1))
             .map(|p| p.0)
+    }
+}
+
+/// Speech level the voice leveler aims for: RMS ≈ -18 dBFS, where game
+/// audio and teammates' voices usually sit.
+const VOICE_TARGET_RMS: f32 = 0.125;
+
+/// Voice leveler: lifts a quiet mic to a steady speaking level (up to
+/// +18 dB) and eases off fast when you shout. It only adapts while you
+/// speak (above ~-50 dBFS), so silence and room noise are never pumped up;
+/// the mix limiter catches any peak.
+fn level_voice(gain: &mut f32, v: &mut [f32]) {
+    if v.is_empty() {
+        return;
+    }
+    let rms = (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt();
+    if rms > 0.003 {
+        let want = (VOICE_TARGET_RMS / rms).clamp(1.0, 8.0);
+        // Down fast (~30 ms), up slowly (~1 s): no pumping between words.
+        let k = if want < *gain { 0.3 } else { 0.01 };
+        *gain += (want - *gain) * k;
+    }
+    for x in v.iter_mut() {
+        *x *= *gain;
+    }
+}
+
+#[cfg(test)]
+mod voice_tests {
+    use super::*;
+
+    fn tone(amp: f32) -> Vec<f32> {
+        (0..960).map(|i| amp * (i as f32 * 0.05).sin()).collect()
+    }
+
+    #[test]
+    fn quiet_voice_is_lifted_to_speaking_level() {
+        let mut g = 2.0;
+        let mut out = Vec::new();
+        for _ in 0..400 {
+            out = tone(0.02); // quiet laptop mic: about -37 dBFS RMS
+            level_voice(&mut g, &mut out);
+        }
+        let rms = (out.iter().map(|x| x * x).sum::<f32>() / out.len() as f32).sqrt();
+        assert!(g > 7.0, "gain {g}");
+        assert!(rms > 0.09, "rms {rms}");
+    }
+
+    #[test]
+    fn loud_voice_is_not_boosted_and_silence_is_left_alone() {
+        let mut g = 2.0;
+        for _ in 0..50 {
+            let mut v = tone(0.5);
+            level_voice(&mut g, &mut v);
+        }
+        assert!((g - 1.0).abs() < 0.05, "gain {g}");
+        let before = g;
+        let mut quiet = vec![0.0005f32; 960];
+        level_voice(&mut g, &mut quiet);
+        assert_eq!(g, before);
     }
 }

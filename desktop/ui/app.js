@@ -194,6 +194,7 @@ let recording = false;
 const fpsHistory = [];
 
 function render(s) {
+  window.lastStatus = s;
   const pc = !!s.pcMode;
   const streaming = (s.connected || pc) && s.video && performance.now() - lastFrameAt < 2000;
   $("pill").className = "pill" + (s.connected || pc ? " on" : "");
@@ -271,26 +272,8 @@ function render(s) {
   renderLive(s.live);
   renderSource(s);
   renderReplay(s.replay);
-  renderGameMode(s.gameMode, s.pcMode);
 }
 
-// ---------------- 16:9 game mode ----------------
-let gameModeTouchedAt = 0;
-$("gameModeToggle").addEventListener("change", (e) => {
-  gameModeTouchedAt = performance.now();
-  invoke("set_game_mode", { on: e.target.checked });
-  toast(e.target.checked
-    ? "16:9 game mode on: the phone switches to 16:9 while streaming over USB"
-    : "16:9 game mode off: the phone keeps its own screen size");
-});
-function renderGameMode(g, pc) {
-  if (!g) return;
-  $("phoneOptions").classList.toggle("hidden", !!pc);
-  if (performance.now() - gameModeTouchedAt > 1500) $("gameModeToggle").checked = !!g.enabled;
-  $("gameModeHint").textContent = g.active && g.note
-    ? g.note
-    : "Makes the phone's screen 16:9 while streaming over USB, so the game fills the stream. Some phones (OnePlus) stretch the picture on the phone itself while it is on: if yours does, leave this off. Your phone's own setting comes back when you stop.";
-}
 
 // ---------------- source: phone or this PC ----------------
 // "This PC" captures a whole screen (straight into the encoder) or one
@@ -830,10 +813,10 @@ function renderMixer(m) {
 
   const key = JSON.stringify(m.micDevices);
   const sel = $("micSelect");
-  const missing = m.micMissing && m.micDevice ? `<option value="${m.micDevice.replace(/"/g, "&quot;")}">${escapeHtml(m.micName || "Chosen mic")} (not connected)</option>` : "";
+  const missing = m.micMissing && m.micDevice && m.micDevice !== "phone" ? `<option value="${m.micDevice.replace(/"/g, "&quot;")}">${escapeHtml(m.micName || "Chosen mic")} (not connected)</option>` : "";
   if (key + missing !== micListKey) {
     micListKey = key + missing;
-    sel.innerHTML = '<option value="">Windows default mic</option>' + missing +
+    sel.innerHTML = '<option value="">Windows default mic</option><option value="phone">Phone mic (from the PhoneCast app)</option>' + missing +
       m.micDevices.map((d) => `<option value="${d.id.replace(/"/g, "&quot;")}">${escapeHtml(d.name)}</option>`).join("");
   }
   strips.mic.el.classList.toggle("missing", !!m.micMissing);

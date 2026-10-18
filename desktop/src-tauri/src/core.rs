@@ -46,10 +46,12 @@ const AUDIO_CONFIG: u8 = 0x03;
 const AUDIO_PCM: u8 = 0x04;
 const STATS: u8 = 0x05;
 const PONG: u8 = 0x06;
+const MIC_PCM: u8 = 0x07;
 // PC -> phone
 const SET_BITRATE: u8 = 0x81;
 const REQUEST_KEYFRAME: u8 = 0x82;
 const PING: u8 = 0x83;
+const SET_MIC: u8 = 0x85;
 
 const FLAG_KEYFRAME: u8 = 0x01;
 
@@ -629,9 +631,10 @@ impl Core {
             i.clock.clear();
             diag::log("phone", format!("connected: {} via {}", i.device, i.remote));
         }
-        if remote == "127.0.0.1" && self.prefs.lock().unwrap().game_16x9 {
-            self.apply_game_mode();
-        }
+        // 16:9 game mode is no longer applied (the user's phone stretched it);
+        // a leftover 16:9 size is still restored on disconnect and at startup.
+        // The phone sends its mic only if it is the chosen mic.
+        self.send_phone_mic();
 
         // Processing happens on its own thread; this one only reads the socket.
         let (tx, rx) = sync_channel::<(u8, u8, i64, Vec<u8>, i64)>(4096);
@@ -747,6 +750,7 @@ impl Core {
                 let rate = u32::from_be_bytes(payload[0..4].try_into().unwrap());
                 self.inner.lock().unwrap().audio = Some((rate, payload[4]));
             }
+            MIC_PCM => self.mixer.push_phone_mic(&payload),
             AUDIO_PCM => {
                 if self.is_pc_mode() {
                     return; // PC sound replaces the phone's game audio
@@ -865,6 +869,21 @@ impl Core {
 
     pub fn request_keyframe(&self) -> bool {
         self.send_phone(REQUEST_KEYFRAME, &[])
+    }
+
+    /// The preview's keyframe requests: at most one every 5 s. Keyframes cost
+    /// 5-10x a normal frame; at a fixed phone bitrate each one starves the
+    /// frames after it, so a flood of them pixelated the whole stream (395 in
+    /// 5 minutes). The preview simply waits for the next one otherwise.
+    pub fn request_keyframe_for_preview(&self) -> bool {
+        static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+        let mut last = LAST.lock().unwrap();
+        if last.is_some_and(|t| t.elapsed() < Duration::from_secs(5)) {
+            return false;
+        }
+        *last = Some(Instant::now());
+        diag::log("video", "preview asked for a keyframe");
+        self.request_keyframe()
     }
 
     /// Keyframe request for "an output fell behind": at most one per second.
@@ -1012,7 +1031,7 @@ impl Core {
             config,
             pc,
             Arc::new(move || {
-                c.request_keyframe();
+                c.request_keyframe_limited("live stream needs a keyframe");
             }),
         )
     }
@@ -1383,12 +1402,18 @@ impl Core {
 
     pub fn set_mic(&self, id: Option<String>, name: Option<String>) {
         self.mixer.set_mic_device(id, name);
+        self.send_phone_mic();
         let mut p = self.prefs.lock().unwrap();
         p.mic = self
             .mixer
             .mic_device()
             .map(|(id, name)| Device { id, name });
         p.save();
+    }
+
+    /// Tells the phone app whether to send its mic (only while chosen).
+    fn send_phone_mic(&self) {
+        self.send_phone(SET_MIC, &[self.mixer.uses_phone_mic() as u8]);
     }
 
     pub fn set_voice_app(&self, id: &str) {

@@ -12,12 +12,14 @@ object Protocol {
     const val AUDIO_PCM = 0x04
     const val STATS = 0x05
     const val PONG = 0x06
+    const val MIC_PCM = 0x07
 
     // PC -> phone
     const val SET_BITRATE = 0x81
     const val REQUEST_KEYFRAME = 0x82
     const val PING = 0x83
     const val STOP = 0x84
+    const val SET_MIC = 0x85
 
     const val FLAG_KEYFRAME = 0x01
 

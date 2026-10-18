@@ -43,7 +43,9 @@ fn set_bitrate(core: CoreState, mbps: f64) -> bool {
 
 #[tauri::command]
 fn request_keyframe(core: CoreState) -> bool {
-    core.request_keyframe()
+    // From the preview: rate-limited (it used to ask ~2x per second while
+    // its decoder lagged, and every keyframe pixelated the stream).
+    core.request_keyframe_for_preview()
 }
 
 #[tauri::command]
@@ -90,6 +92,31 @@ fn save_clip(core: CoreState, seconds: u32) -> Result<(), String> {
 #[tauri::command]
 fn set_game_mode(core: CoreState, on: bool) {
     core.set_game_mode(on);
+}
+
+/// Saves the banner made in the banner editor (PNG) and its settings.
+#[tauri::command]
+fn save_banner(png: Vec<u8>, spec: serde_json::Value) -> Result<(), String> {
+    if !png.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]) || png.len() > 8 << 20 {
+        return Err("Not a PNG image".into());
+    }
+    let p = live::banner_path();
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&p, &png).map_err(|e| e.to_string())?;
+    std::fs::write(p.with_extension("json"), spec.to_string()).map_err(|e| e.to_string())?;
+    diag::log("live", format!("banner saved ({} KB)", png.len() / 1024));
+    Ok(())
+}
+
+/// The banner editor's last settings (or null).
+#[tauri::command]
+fn get_banner() -> serde_json::Value {
+    std::fs::read(live::banner_path().with_extension("json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(serde_json::Value::Null)
 }
 
 #[tauri::command]
@@ -390,6 +417,8 @@ fn main() {
             save_clip,
             set_replay_seconds,
             set_game_mode,
+            save_banner,
+            get_banner,
             set_clip_look,
             open_clips,
             get_hotkeys,

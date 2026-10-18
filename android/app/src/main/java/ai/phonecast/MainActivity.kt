@@ -7,9 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -48,10 +46,10 @@ class MainActivity : Activity() {
 
     private val ui = Handler(Looper.getMainLooper())
 
-    private val qualityOptions = listOf("Native (best)" to 0, "1920 (balanced)" to 1920, "1280 (battery saver)" to 1280)
+    private val qualityOptions = listOf("1920 · stream size (recommended, cooler)" to 1920, "Native (sharpest, hotter)" to 0, "1280 (battery saver)" to 1280)
     private val fpsOptions = listOf(60, 30)
     private val bitrateOptions = listOf(
-        "Auto · best (USB 35 / Wi-Fi 20 Mbps)" to 0, "10 Mbps" to 10_000_000, "20 Mbps" to 20_000_000,
+        "Auto · best (USB 30 / Wi-Fi 20 Mbps)" to 0, "10 Mbps" to 10_000_000, "20 Mbps" to 20_000_000,
         "30 Mbps" to 30_000_000, "40 Mbps" to 40_000_000, "60 Mbps" to 60_000_000, "80 Mbps (max)" to 80_000_000,
     )
 
@@ -108,16 +106,11 @@ class MainActivity : Activity() {
     @Suppress("DEPRECATION")
     private fun askScreenCapture() {
         val mpm = getSystemService(MediaProjectionManager::class.java)
-        // Android 14+ also offers "A single app" in the share prompt. Picking
-        // it (or it being the default) captured only PhoneCast itself, so the
-        // stream went to 0 fps as soon as the game opened. Ask for the entire
-        // screen only, so that choice can't be made by mistake.
-        val intent = if (Build.VERSION.SDK_INT >= 34) {
-            mpm.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay())
-        } else {
-            mpm.createScreenCaptureIntent()
-        }
-        startActivityForResult(intent, REQ_CAPTURE)
+        // Android 14+ offers "Entire screen" or "A single app" (pick the game:
+        // notifications and other apps then stay off the stream). Both work:
+        // the capture follows the shared app's size. The earlier 0 fps was a
+        // frame-pacer bug, not the single-app choice.
+        startActivityForResult(mpm.createScreenCaptureIntent(), REQ_CAPTURE)
     }
 
     @Deprecated("Deprecated in Java")

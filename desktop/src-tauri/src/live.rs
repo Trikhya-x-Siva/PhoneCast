@@ -154,6 +154,7 @@ impl LiveSettings {
                 Framing::Fit => "fit",
                 Framing::Fill => "fill",
                 Framing::Phone => "phone",
+                Framing::Banner(_) => "banner",
             }
             .into();
         }
@@ -663,7 +664,7 @@ impl Live {
         ClipLook {
             encoder,
             framing: match Framing::parse(&s.framing) {
-                Framing::Phone => Framing::Blur,
+                Framing::Phone | Framing::Banner(_) => Framing::Blur,
                 f => f,
             },
             w: preset.w,
@@ -786,6 +787,15 @@ impl Live {
             // custom servers) and only for the phone picture.
             let framing = match Framing::parse(&s.framing) {
                 Framing::Phone if !(pf.any_shape() && pc.is_none()) => Framing::Blur,
+                // Banner: game full width on top; the strip below gets the
+                // banner. A 16:9 (or narrower) picture has no strip: Fit.
+                Framing::Banner(_) if pc.is_none() => {
+                    match banner_game_height(p.w, config.width as u32, config.height as u32) {
+                        Some(gh) => Framing::Banner(gh),
+                        None => Framing::Fit,
+                    }
+                }
+                Framing::Banner(_) => Framing::Fit,
                 f => f,
             };
             let (w, h) = match framing {
@@ -886,6 +896,10 @@ pub enum Framing {
     /// custom servers only; other platforms get the blurred 16:9 framing.
     /// Viewers on phones see it full screen; desktop players add thin bars.
     Phone,
+    /// 16:9 like other streamers: the game full width at the top (nothing
+    /// cut, nothing stretched) and the user's banner in the strip below.
+    /// Holds the game picture's height in the output (set when going live).
+    Banner(u32),
 }
 
 impl Framing {
@@ -894,8 +908,46 @@ impl Framing {
             "fit" => Framing::Fit,
             "fill" => Framing::Fill,
             "phone" => Framing::Phone,
+            "banner" => Framing::Banner(0),
             _ => Framing::Blur,
         }
+    }
+}
+
+/// Height of the game picture in a `w`-wide 16:9 banner layout (even), or
+/// None when the source is not wider than 16:9 (it fills the frame).
+pub fn banner_game_height(w: u32, src_w: u32, src_h: u32) -> Option<u32> {
+    let (long, short) = (src_w.max(src_h), src_w.min(src_h));
+    if short == 0 || long * 9 <= short * 16 + long / 100 {
+        return None;
+    }
+    Some(((w as f64 * short as f64 / long as f64) / 2.0).round() as u32 * 2)
+}
+
+/// The banner image shown under the game (made in PhoneCast's banner editor).
+pub fn banner_path() -> std::path::PathBuf {
+    std::env::var("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join("PhoneCast")
+        .join("banner.png")
+}
+
+/// FFmpeg input for the banner strip: the saved image, or a plain dark strip
+/// until one is made. One frame a second is plenty for a still image.
+fn banner_input() -> Vec<String> {
+    let p = banner_path();
+    if p.exists() {
+        ["-loop", "1", "-framerate", "1", "-i"]
+            .iter()
+            .map(|s| s.to_string())
+            .chain([p.to_string_lossy().into_owned()])
+            .collect()
+    } else {
+        ["-f", "lavfi", "-i", "color=c=0x0b0b12:s=1920x208:r=1"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 }
 
@@ -1083,6 +1135,9 @@ impl Job {
         )
         .map(|s| s.to_string())
         .collect();
+        if let Framing::Banner(_) = self.framing {
+            a.extend(banner_input());
+        }
         a.extend([
             "-filter_complex".into(),
             filters,
@@ -1557,6 +1612,16 @@ pub(crate) fn video_filter(
                 &["-hwaccel", "cuda"],
                 format!("[0:v:0]{crop16x9},hwupload_cuda,scale_cuda={w}:{h}:interp_algo=lanczos:format=nv12,fps=60,setsar=1[v]"),
             ),
+            // The banner canvas (input 1, one frame a second) is the base
+            // layer, uploaded from the CPU: with a GPU-padded game as the base,
+            // overlay_cuda left a green bottom row at 720p/1080p.
+            Framing::Banner(gh) => (
+                &["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+                format!(
+                    "[0:v:0]scale_cuda=w={w}:h={gh}:interp_algo=lanczos:format=nv12[g];                     [1:v]scale={w}:{st}:flags=lanczos,pad={w}:{h}:0:{gh}:black,fps=60,format=nv12,hwupload_cuda[bg];                     [bg][g]overlay_cuda=x=0:y=0:shortest=1,scale_cuda=format=yuv420p,fps=60,setsar=1[v]",
+                    st = h - gh
+                ),
+            ),
         }
     } else {
         let fit = format!(
@@ -1572,6 +1637,10 @@ pub(crate) fn video_filter(
                 format!("[0:v:0]{fit},pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black")
             }
             Framing::Fill => format!("[0:v:0]{crop16x9},scale={w}:{h}:flags=bicubic"),
+            Framing::Banner(gh) => format!(
+                "[0:v:0]scale={w}:{gh}:flags=bicubic[g];                 [1:v]scale={w}:{st}:flags=lanczos,pad={w}:{h}:0:{gh}:black,fps=60[bg];                 [bg][g]overlay=x=0:y=0:shortest=1",
+                st = h - gh
+            ),
         };
         (
             &["-hwaccel", "auto"],
@@ -2348,6 +2417,10 @@ mod tests {
         assert_eq!(phone_shape(2160, 2376, 1080), (4096, 1862)); // encoder width limit
         assert_eq!(phone_shape(1080, 1920, 1080), (1920, 1080)); // already 16:9
         assert_eq!(phone_shape(1080, 2048, 1536), (1920, 1080)); // 4:3 tablet
+        assert_eq!(banner_game_height(1920, 2376, 1080), Some(872));
+        assert_eq!(banner_game_height(1280, 1080, 2376), Some(582));
+        assert_eq!(banner_game_height(1920, 1920, 1080), None); // fills 16:9
+        assert_eq!(banner_game_height(1920, 1920, 1088), None);
     }
 
     /// The GPU filter graph must produce exactly the preset size, square
@@ -2369,16 +2442,30 @@ mod tests {
             (2560, 1440),
             (3840, 2160),
         ] {
-            for framing in [Framing::Blur, Framing::Fit, Framing::Fill, Framing::Phone] {
+            let banner = Framing::Banner(banner_game_height(w, 2376, 1080).unwrap());
+            for framing in [
+                Framing::Blur,
+                Framing::Fit,
+                Framing::Fill,
+                Framing::Phone,
+                banner,
+            ] {
                 let (w, h) = match framing {
                     Framing::Phone => phone_shape(h, 2376, 1080),
                     _ => (w, h),
                 };
                 let (hw, filter) = video_filter(true, framing, w, h);
+                let extra = if let Framing::Banner(_) = framing {
+                    banner_input()
+                } else {
+                    Vec::new()
+                };
                 let st = Command::new(&ffmpeg)
                     .args(["-hide_banner", "-loglevel", "error", "-y"])
                     .args(hw)
-                    .args(["-i", &sample, "-t", "1", "-filter_complex", &filter])
+                    .args(["-i", &sample])
+                    .args(&extra)
+                    .args(["-t", "1", "-filter_complex", &filter])
                     .args(["-map", "[v]", "-c:v", "h264_nvenc", "-f", "flv"])
                     .arg(&out)
                     .status()

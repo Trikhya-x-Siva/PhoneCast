@@ -121,7 +121,17 @@ class VideoEncoder(
         }
     }
 
-    fun requestKeyframe() {
+    private var lastKeyframeRequestMs = 0L
+
+    /**
+     * At most one forced keyframe per 2 s (unless [force]): each costs 5–10×
+     * a normal frame, and at a fixed bitrate a burst of them starves the
+     * frames around them, which showed as constant pixelation on stream.
+     */
+    fun requestKeyframe(force: Boolean = false) {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (!force && now - lastKeyframeRequestMs < 2000) return
+        lastKeyframeRequestMs = now
         runCatching {
             mediaCodec.setParameters(Bundle().apply {
                 putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)

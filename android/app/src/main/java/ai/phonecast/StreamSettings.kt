@@ -10,8 +10,13 @@ data class StreamSettings(
     /** PC address for Wi-Fi mode. */
     val host: String = "",
     val codec: Int = Protocol.CODEC_H264,
-    /** Longest side of the captured video, 0 = native screen resolution. */
-    val maxSize: Int = 0,
+    /**
+     * Longest side of the captured video, 0 = native screen resolution.
+     * Default 1920: the stream shows the game 1920 px wide, so capturing the
+     * full 2376 px only made the phone hotter (~35% more pixels to capture
+     * and encode) with no visible gain on stream.
+     */
+    val maxSize: Int = 1920,
     val fps: Int = 60,
     /** 0 = pick automatically for the transport. */
     val bitrateBps: Int = 0,
@@ -22,8 +27,9 @@ data class StreamSettings(
     val effectiveBitrate: Int
         get() = when {
             bitrateBps > 0 -> bitrateBps
-            // 50 Mbps CBR at native resolution: visually identical to the screen.
-            transport == Transport.USB -> 35_000_000
+            // 30 Mbps at 1920 px: visually identical to the screen (more bits
+            // per pixel than the old 35 Mbps at 2376 px) and cooler.
+            transport == Transport.USB -> 30_000_000
             else -> 20_000_000
         }
 
@@ -45,7 +51,7 @@ data class StreamSettings(
             .putString("transport", transport.name)
             .putString("host", host)
             .putInt("codec", codec)
-            .putInt("maxSize", maxSize)
+            .putInt("maxSize2", maxSize)
             .putInt("fps", fps)
             .putInt("bitrate", bitrateBps)
             .putBoolean("heatProtect", heatProtect)
@@ -73,7 +79,7 @@ data class StreamSettings(
                     .getOrDefault(d.transport),
                 host = p.getString("host", d.host) ?: d.host,
                 codec = p.getInt("codec", d.codec),
-                maxSize = p.getInt("maxSize", d.maxSize),
+                maxSize = p.getInt("maxSize2", d.maxSize),
                 fps = p.getInt("fps", d.fps),
                 bitrateBps = p.getInt("bitrate", d.bitrateBps),
                 heatProtect = p.getBoolean("heatProtect", d.heatProtect),
