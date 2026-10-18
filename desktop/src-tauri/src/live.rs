@@ -38,7 +38,9 @@ pub struct DestSettings {
 pub struct LiveSettings {
     pub youtube: DestSettings,
     pub twitch: DestSettings,
-    /// "fit" = whole picture with bars, "fill" = crop sides to fill 16:9.
+    /// "blur" = whole picture over a blurred copy of itself (what mobile
+    /// streamers use), "fit" = whole picture with black bars,
+    /// "fill" = crop the sides to fill 16:9.
     pub framing: String,
 }
 
@@ -55,7 +57,7 @@ impl Default for LiveSettings {
                 quality: "1080p60".into(),
                 key_enc: String::new(),
             },
-            framing: "fit".into(),
+            framing: "blur".into(),
         }
     }
 }
@@ -93,30 +95,28 @@ struct Preset {
     hevc: bool,
 }
 
+// YouTube: 1440p is the sweet spot for phone games. YouTube re-encodes
+// 1440p+ uploads with its higher-quality VP9 codec, so viewers at 1080p get a
+// visibly sharper picture than from a 1080p upload. 4K is not offered: a phone
+// picture is only ~1080 px tall (4K just upscales it), it needs 35+ Mbps of
+// steady upload, and YouTube rejected 4K HEVC from us in a real test.
+// The first entry is the fallback for unknown/old saved choices.
 const YOUTUBE: &[Preset] = &[
     Preset {
-        id: "1080p60",
-        label: "1080p60 · 12 Mbps",
-        w: 1920,
-        h: 1080,
-        kbps: 12_000,
-        hevc: false,
-    },
-    Preset {
         id: "1440p60",
-        label: "1440p60 · 24 Mbps (recommended)",
+        label: "1440p60 · 20 Mbps (best quality, recommended)",
         w: 2560,
         h: 1440,
-        kbps: 24_000,
+        kbps: 20_000,
         hevc: false,
     },
     Preset {
-        id: "2160p60",
-        label: "4K60 · 35 Mbps HEVC",
-        w: 3840,
-        h: 2160,
-        kbps: 35_000,
-        hevc: true,
+        id: "1080p60",
+        label: "1080p60 · 13.5 Mbps (for slower upload)",
+        w: 1920,
+        h: 1080,
+        kbps: 13_500,
+        hevc: false,
     },
 ];
 
@@ -394,11 +394,12 @@ impl Live {
             }
         }
         if let Some(f) = v.get("framing").and_then(Value::as_str) {
-            s.framing = if f == "fill" {
-                "fill".into()
-            } else {
-                "fit".into()
-            };
+            s.framing = match Framing::parse(f) {
+                Framing::Blur => "blur",
+                Framing::Fit => "fit",
+                Framing::Fill => "fill",
+            }
+            .into();
         }
         s.save().map_err(|e| e.to_string())
     }
@@ -503,8 +504,9 @@ impl Live {
                 quality: p.id.into(),
             }));
             let stop = Arc::new(AtomicBool::new(false));
-            // ~5 s of buffer: absorbs upload hiccups without adding delay normally.
-            let (tx, rx) = SinkTx::new(800);
+            // ~15 s of buffer (video + 10 ms audio packets): rides out upload and
+            // CPU hiccups instead of skipping ahead; adds no delay when all is well.
+            let (tx, rx) = SinkTx::new(2400);
             let job = Job {
                 ffmpeg: ffmpeg.clone(),
                 url,
@@ -517,7 +519,7 @@ impl Live {
                 h: p.h,
                 kbps: p.kbps,
                 hevc: p.hevc,
-                fill: s.framing == "fill",
+                framing: Framing::parse(&s.framing),
                 pc: pc.clone(),
                 file: false,
             };
@@ -577,6 +579,29 @@ impl Live {
     }
 }
 
+/// How a picture that isn't 16:9 (phones are ~2.2:1) is fitted into the
+/// 16:9 stream. Never stretches.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Framing {
+    /// Whole picture, centred, over a blurred and slightly darkened copy of
+    /// itself filling the rest of the frame. Nothing cut, no black bars.
+    Blur,
+    /// Whole picture with black bars.
+    Fit,
+    /// Fills the frame by cropping the sides (edge HUD may be cut).
+    Fill,
+}
+
+impl Framing {
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "fit" => Framing::Fit,
+            "fill" => Framing::Fill,
+            _ => Framing::Blur,
+        }
+    }
+}
+
 // ---------------- one destination ----------------
 
 pub struct Job {
@@ -588,7 +613,7 @@ pub struct Job {
     pub h: u32,
     pub kbps: u32,
     pub hevc: bool,
-    pub fill: bool,
+    pub framing: Framing,
     /// PC screen source; None = phone stream piped in as MKV.
     pub pc: Option<Arc<PcVideo>>,
     /// Record to an MKV file (visually lossless) instead of streaming.
@@ -618,7 +643,7 @@ pub fn spawn_job(
         quality: format!("{}p", job.h),
     }));
     let stop = Arc::new(AtomicBool::new(false));
-    let (tx, rx) = SinkTx::new(800);
+    let (tx, rx) = SinkTx::new(2400);
     let (st, sp) = (status.clone(), stop.clone());
     std::thread::Builder::new()
         .name(format!("job-{name}"))
@@ -634,37 +659,7 @@ impl Job {
         }
         let (w, h) = (self.w, self.h);
         let nvidia = self.encoder.contains("nvenc");
-        // 16:9 framing. "fit" keeps the whole picture (bars), "fill" crops the sides.
-        let crop16x9 = "crop=w='min(iw,ih*16/9)':h='min(ih,iw*9/16)'";
-        let (hwaccel, filters): (&[&str], String) = if nvidia {
-            // Everything on the GPU: NVDEC decode → CUDA resize → NVENC.
-            // Measured on RTX 4050: 1440p + 1080p together at 1.66× real time.
-            let scale = format!("scale_cuda={w}:{h}:interp_algo=lanczos:format=nv12");
-            if self.fill {
-                (
-                    &["-hwaccel", "cuda"],
-                    format!("{crop16x9},hwupload_cuda,{scale},fps=60"),
-                )
-            } else {
-                (
-                    &["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
-                    format!(
-                        "scale_cuda={w}:{h}:force_original_aspect_ratio=decrease:interp_algo=lanczos:format=nv12,\
-                         pad_cuda={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=60"
-                    ),
-                )
-            }
-        } else {
-            let frame = if self.fill {
-                format!("{crop16x9},scale={w}:{h}:flags=bicubic")
-            } else {
-                format!("scale={w}:{h}:force_original_aspect_ratio=decrease:flags=bicubic,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black")
-            };
-            (
-                &["-hwaccel", "auto"],
-                format!("{frame},fps=60,format=yuv420p,setsar=1"),
-            )
-        };
+        let (hwaccel, filters) = video_filter(nvidia, self.framing, w, h);
         let mut a: Vec<String> = [
             "-hide_banner",
             "-y",
@@ -680,8 +675,11 @@ impl Job {
         .chain(hwaccel.iter())
         .chain(
             [
+                // No "+nobuffer": with it, FFmpeg decoded the first frames before
+                // their reference pictures arrived ("Missing reference picture"),
+                // dropping ~1 s and glitching every stream start.
                 "-fflags",
-                "+nobuffer+genpts",
+                "+genpts",
                 "-analyzeduration",
                 "1000000",
                 "-probesize",
@@ -690,16 +688,19 @@ impl Job {
                 "matroska",
                 "-i",
                 "pipe:0",
-                "-map",
-                "0:v:0",
-                "-map",
-                "0:a:0",
             ]
             .iter(),
         )
         .map(|s| s.to_string())
         .collect();
-        a.extend(["-vf".into(), filters]);
+        a.extend([
+            "-filter_complex".into(),
+            filters,
+            "-map".into(),
+            "[v]".into(),
+            "-map".into(),
+            "0:a:0".into(),
+        ]);
         a.extend(encoder_args(&self.encoder, self.kbps, self.hevc, w >= 3840));
         a.extend(self.output_args());
         a
@@ -810,7 +811,11 @@ impl Job {
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
-        hide(&mut cmd);
+        // No console window, and ABOVE_NORMAL priority: in a real stream, other
+        // heavy programs on the PC starved FFmpeg and the stream skipped ahead
+        // every 10–20 s. The game runs on the phone, so this costs nothing.
+        #[cfg(windows)]
+        cmd.creation_flags(0x0800_0000 | 0x0000_8000);
         cmd.spawn()
     }
 
@@ -1010,6 +1015,66 @@ fn watch_progress(stderr: std::process::ChildStderr, status: Arc<Mutex<DestStatu
     });
 }
 
+/// FFmpeg hwaccel flags and a filter graph turning the phone picture into a
+/// steady 60 fps `w`×`h` frame labelled `[v]`, never stretched.
+///
+/// On NVIDIA everything stays on the GPU (NVDEC → CUDA → NVENC). The blurred
+/// background is made from a tiny 384×216 copy: download, blur and upload
+/// of a frame that small costs well under 1 ms. Measured on an RTX 4050 with a
+/// real 2376×1080 phone recording: 1440p blur at 2.2× real time.
+fn video_filter(
+    nvidia: bool,
+    framing: Framing,
+    w: u32,
+    h: u32,
+) -> (&'static [&'static str], String) {
+    let crop16x9 = "crop=w='min(iw,ih*16/9)':h='min(ih,iw*9/16)'";
+    // Blurred, slightly darkened and more saturated so the real picture stands out.
+    let soften = "boxblur=luma_radius=12:luma_power=2:chroma_radius=6:chroma_power=2,eq=brightness=-0.06:saturation=1.15";
+    if nvidia {
+        let fit = format!(
+            "scale_cuda=w={w}:h={h}:force_original_aspect_ratio=decrease:force_divisible_by=2:interp_algo=lanczos:format=nv12"
+        );
+        match framing {
+            Framing::Blur => (
+                &["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+                format!(
+                    "[0:v:0]split=2[a][b];[a]{fit}[fg];\
+                     [b]scale_cuda=w=384:h=216:force_original_aspect_ratio=increase:force_divisible_by=2:format=nv12,\
+                     hwdownload,format=nv12,format=yuv420p,crop=384:216,{soften},format=nv12,hwupload_cuda,\
+                     scale_cuda=w={w}:h={h}:interp_algo=bilinear:format=nv12[bg];\
+                     [bg][fg]overlay_cuda=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2,fps=60[v]"
+                ),
+            ),
+            Framing::Fit => (
+                &["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+                format!("[0:v:0]{fit},pad_cuda={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=60[v]"),
+            ),
+            Framing::Fill => (
+                &["-hwaccel", "cuda"],
+                format!("[0:v:0]{crop16x9},hwupload_cuda,scale_cuda={w}:{h}:interp_algo=lanczos:format=nv12,fps=60[v]"),
+            ),
+        }
+    } else {
+        let fit = format!(
+            "scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bicubic"
+        );
+        let body = match framing {
+            Framing::Blur => format!(
+                "[0:v:0]split=2[a][b];[a]{fit}[fg];\
+                 [b]scale=384:216:force_original_aspect_ratio=increase,crop=384:216,{soften},scale={w}:{h}:flags=bilinear[bg];\
+                 [bg][fg]overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2"
+            ),
+            Framing::Fit => format!("[0:v:0]{fit},pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black"),
+            Framing::Fill => format!("[0:v:0]{crop16x9},scale={w}:{h}:flags=bicubic"),
+        };
+        (
+            &["-hwaccel", "auto"],
+            format!("{body},fps=60,format=yuv420p,setsar=1[v]"),
+        )
+    }
+}
+
 fn friendly_error(line: &str) -> String {
     let l = line.to_lowercase();
     if l.contains("ddagrab") || (l.contains("operation not permitted") && l.contains("input")) {
@@ -1065,7 +1130,7 @@ mod tests {
             h: mon.height,
             kbps: 0,
             hevc: false,
-            fill: false,
+            framing: Framing::Fit,
             pc: Some(pc),
             file: true,
         };
@@ -1142,7 +1207,7 @@ mod tests {
         }
         let out = std::env::temp_dir().join("phonecast_live_test.flv");
         std::fs::remove_file(&out).ok();
-        for fill in [false, true] {
+        for framing in [Framing::Blur, Framing::Fit, Framing::Fill] {
             let job = Job {
                 ffmpeg: ffmpeg.clone(),
                 url: out.display().to_string(),
@@ -1151,7 +1216,7 @@ mod tests {
                 h: 1440,
                 kbps: 24_000,
                 hevc: false,
-                fill,
+                framing,
                 pc: None,
                 file: false,
             };
@@ -1203,14 +1268,14 @@ mod tests {
             }
             let s = status.lock().unwrap().clone();
             println!(
-                "fill={fill} status: {} fps={} kbps={} err={:?}",
+                "{framing:?} status: {} fps={} kbps={} err={:?}",
                 s.state, s.fps, s.kbps, s.error
             );
             assert_eq!(s.state, "live");
             drop(tx); // like Live::stop()
             t.join().unwrap();
             let size = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
-            println!("fill={fill} wrote {} ({} KB)", out.display(), size / 1024);
+            println!("{framing:?} wrote {} ({} KB)", out.display(), size / 1024);
             assert!(size > 100_000);
         }
     }

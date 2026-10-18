@@ -669,7 +669,7 @@ impl Core {
                 h: pc.screen_h,
                 kbps: 0,
                 hevc: false,
-                fill: false,
+                framing: live::Framing::Fit,
                 pc: Some(pc.clone()),
                 file: true,
             };
