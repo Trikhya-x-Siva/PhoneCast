@@ -12,8 +12,8 @@ import android.opengl.GLES20
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Process
+import android.os.SystemClock
 import android.util.Log
-import android.view.Choreographer
 import android.view.Surface
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -31,11 +31,11 @@ import java.util.concurrent.CountDownLatch
  * Result: exactly 60 fps, evenly spaced, whatever the game does. The copy is a
  * single textured quad — a negligible GPU cost.
  */
+@Suppress("UNUSED_PARAMETER")
 class FramePacer(fps: Int, refreshRate: Float) {
-    private val thread = HandlerThread("frame-pacer", Process.THREAD_PRIORITY_DISPLAY).apply { start() }
+    private val thread = HandlerThread("frame-pacer", Process.THREAD_PRIORITY_URGENT_DISPLAY).apply { start() }
     private val handler = Handler(thread.looper)
     private val intervalNs = 1_000_000_000L / fps
-    private val halfVsyncNs = (1_000_000_000L / refreshRate.coerceAtLeast(30f) / 2).toLong()
 
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var context: EGLContext = EGL14.EGL_NO_CONTEXT
@@ -77,7 +77,7 @@ class FramePacer(fps: Int, refreshRate: Float) {
                 freshSinceLast = true
             }, handler)
             inputSurface = Surface(surfaceTexture)
-            Choreographer.getInstance().postFrameCallback(tick)
+            handler.post(tick)
         }
     }
 
@@ -94,20 +94,30 @@ class FramePacer(fps: Int, refreshRate: Float) {
         nextNs = 0L
     }
 
-    private val tick = object : Choreographer.FrameCallback {
-        override fun doFrame(frameTimeNanos: Long) {
+    /**
+     * Runs on its own clock, not Choreographer: when the phone is hot or the
+     * app is in the background, Android lowers Choreographer's rate for this
+     * app (we measured 30 Hz mid-stream), which halved the stream's frame rate.
+     * A Handler timer is not throttled, so output stays at exactly `fps`.
+     */
+    private val tick = object : Runnable {
+        override fun run() {
             if (!running) return
-            Choreographer.getInstance().postFrameCallback(this)
-            if (output == EGL14.EGL_NO_SURFACE || !hasFrame) return
-            if (nextNs == 0L) nextNs = frameTimeNanos
-            if (frameTimeNanos < nextNs - halfVsyncNs) return // not our turn yet
-
-            // Timestamp on the exact grid; resync after a long stall (screen off, etc.).
-            val pts = if (frameTimeNanos - nextNs > intervalNs) frameTimeNanos else nextNs
-            nextNs = pts + intervalNs
-            if (!freshSinceLast) repeated++
-            freshSinceLast = false
-            draw(pts)
+            val now = System.nanoTime()
+            if (output != EGL14.EGL_NO_SURFACE && hasFrame) {
+                if (nextNs == 0L || now - nextNs > intervalNs * 3) nextNs = now // start / resync after a stall
+                if (now >= nextNs - 1_500_000L) { // our turn (allow 1.5 ms early wake-up)
+                    // Timestamp on the exact grid, so the stream is perfectly even.
+                    val pts = nextNs
+                    nextNs += intervalNs
+                    if (!freshSinceLast) repeated++
+                    freshSinceLast = false
+                    draw(pts)
+                }
+            }
+            val waitNs = if (nextNs == 0L) intervalNs else nextNs - System.nanoTime()
+            val waitMs = ((waitNs + 999_999L) / 1_000_000L).coerceIn(0L, 50L) // round up: never early
+            handler.postAtTime(this, SystemClock.uptimeMillis() + waitMs)
         }
     }
 
@@ -131,7 +141,7 @@ class FramePacer(fps: Int, refreshRate: Float) {
     fun release() {
         running = false
         runBlocking {
-            Choreographer.getInstance().removeFrameCallback(tick)
+            handler.removeCallbacks(tick)
             runCatching { inputSurface.release() }
             runCatching { surfaceTexture.release() }
             EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)

@@ -23,7 +23,7 @@ data class StreamSettings(
         get() = when {
             bitrateBps > 0 -> bitrateBps
             // 50 Mbps CBR at native resolution: visually identical to the screen.
-            transport == Transport.USB -> 50_000_000
+            transport == Transport.USB -> 35_000_000
             else -> 20_000_000
         }
 

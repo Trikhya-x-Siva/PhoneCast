@@ -706,7 +706,7 @@ for (const el of modal.querySelectorAll(".dest")) {
     d.key.type = d.key.type === "password" ? "text" : "password";
   });
 }
-let framing = "fit";
+let framing = "blur";
 for (const b of $("framing").querySelectorAll("button")) {
   b.addEventListener("click", () => {
     framing = b.dataset.v;
@@ -732,7 +732,7 @@ function fillModal(s) {
       ? "Saved ✓ — paste a new key to replace it"
       : `Paste your ${id === "youtube" ? "YouTube" : "Twitch"} stream key`;
   }
-  framing = s.framing;
+  framing = s.framing || "blur";
   for (const x of $("framing").querySelectorAll("button")) x.classList.toggle("on", x.dataset.v === framing);
   updateUpload();
 }
