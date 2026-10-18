@@ -9,6 +9,8 @@ mod core;
 mod diag;
 mod live;
 mod mkv;
+mod presets;
+mod setup;
 mod sinks;
 
 use crate::core::Core;
@@ -88,6 +90,82 @@ fn get_live_settings(core: CoreState) -> Value {
 fn save_live_settings(core: CoreState, settings: Value) -> Result<Value, String> {
     core.live.update_settings(&settings)?;
     Ok(core.live.settings_json())
+}
+
+/// Validates an unsaved Go live edit: platform limits + upload budget.
+#[tauri::command]
+fn check_live_settings(core: CoreState, settings: Value) -> Result<Value, String> {
+    core.live.check_settings(&settings)
+}
+
+// ---------------- first-run setup wizard ----------------
+
+type Install = std::sync::Mutex<Option<setup::DownloadState>>;
+
+/// Encoder probe (runs FFmpeg a few times, so off the UI thread).
+#[tauri::command]
+async fn setup_probe(core: CoreState<'_>) -> Result<Value, String> {
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.live.encoder_info())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Starts the one-click FFmpeg install; poll `setup_install_progress`.
+#[tauri::command]
+fn setup_install_ffmpeg(core: CoreState, install: State<Install>) -> Value {
+    let mut g = install.lock().unwrap();
+    if let Some(st) = g.as_ref() {
+        let j = st.json();
+        if !j["failed"].as_bool().unwrap_or(false) && !j["done"].as_bool().unwrap_or(false) {
+            return j;
+        }
+    }
+    let st = setup::DownloadState::default();
+    *g = Some(st.clone());
+    let core = core.inner().clone();
+    std::thread::spawn(move || {
+        if setup::install_ffmpeg(&st).is_ok() {
+            core.live.reload_ffmpeg();
+        }
+    });
+    json!({ "percent": 0, "message": "Starting…" })
+}
+
+#[tauri::command]
+fn setup_install_progress(install: State<Install>) -> Value {
+    install
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|s| s.json())
+        .unwrap_or(Value::Null)
+}
+
+/// ~10 s upload test; emits `setup-upload` progress events. Saves the
+/// minimum as the upload budget and returns per-platform recommendations.
+#[tauri::command]
+async fn setup_upload_test(app: tauri::AppHandle, core: CoreState<'_>) -> Result<Value, String> {
+    use tauri::Emitter;
+    let core = core.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = setup::upload_speed_test(10.0, &|f, mbps| {
+            app.emit("setup-upload", json!({ "fraction": f, "mbps": mbps }))
+                .ok();
+        })?;
+        let min = (r.min * 10.0).floor() / 10.0;
+        core.live.update_settings(&json!({ "uploadMbps": min }))?;
+        let hevc = core.live.settings_json()["hevc"].as_bool().unwrap_or(false);
+        Ok(json!({
+            "minMbps": min,
+            "medianMbps": (r.median * 10.0).round() / 10.0,
+            "maxMbps": (r.max * 10.0).round() / 10.0,
+            "samples": r.samples,
+            "recommend": setup::recommendations(min, hevc),
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -201,6 +279,7 @@ fn main() {
             })?;
             let ai = ai::Ai::new(app.handle().clone(), core.mixer.clone());
             app.manage(core);
+            app.manage(Install::default());
             app.manage(ai);
             Ok(())
         })
@@ -230,6 +309,11 @@ fn main() {
             set_audio_option,
             get_live_settings,
             save_live_settings,
+            check_live_settings,
+            setup_probe,
+            setup_install_ffmpeg,
+            setup_install_progress,
+            setup_upload_test,
             start_live,
             stop_live,
             get_sources,
