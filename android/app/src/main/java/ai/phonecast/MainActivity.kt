@@ -49,7 +49,7 @@ class MainActivity : Activity() {
     private val qualityOptions = listOf("1920 · stream size (recommended, cooler)" to 1920, "Native (sharpest, hotter)" to 0, "1280 (battery saver)" to 1280)
     private val fpsOptions = listOf(60, 30)
     private val bitrateOptions = listOf(
-        "Auto · best (USB 30 / Wi-Fi 20 Mbps)" to 0, "10 Mbps" to 10_000_000, "20 Mbps" to 20_000_000,
+        "Auto · best (USB 20 / Wi-Fi 20 Mbps)" to 0, "10 Mbps" to 10_000_000, "20 Mbps" to 20_000_000,
         "30 Mbps" to 30_000_000, "40 Mbps" to 40_000_000, "60 Mbps" to 60_000_000, "80 Mbps (max)" to 80_000_000,
     )
 

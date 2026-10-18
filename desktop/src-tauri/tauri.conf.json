@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PhoneCast",
+  "productName": "OSSG",
   "version": "0.1.0",
   "identifier": "ai.phonecast.desktop",
   "build": {
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "PhoneCast",
+        "title": "OSSG — Open Source Streaming for Gaming",
         "width": 1280,
         "height": 780,
         "minWidth": 960,

@@ -122,9 +122,7 @@ class CaptureService : Service(), StreamClient.Listener {
             targetBitrate = settings.effectiveBitrate
             currentBitrate = targetBitrate
 
-            // Also over USB: if USB debugging drops, the stream moves to Wi-Fi,
-            // which then needs to be awake and low-latency.
-            run {
+            if (settings.transport == Transport.WIFI) {
                 val wm = applicationContext.getSystemService(WifiManager::class.java)
                 @Suppress("DEPRECATION")
                 val mode = if (Build.VERSION.SDK_INT >= 29)
@@ -275,6 +273,15 @@ class CaptureService : Service(), StreamClient.Listener {
                     setCurrentBitrate(minOf(ceiling, (currentBitrate * 1.1).toInt()))
                 } else if (currentBitrate > ceiling) {
                     setCurrentBitrate(ceiling)
+                }
+                // USB dropped and the stream moved to Wi-Fi: keep Wi-Fi awake and
+                // low-latency from now on (not held over USB: it costs battery).
+                if (wifiLock == null && c.via.startsWith("Wi-Fi")) {
+                    val wm = applicationContext.getSystemService(WifiManager::class.java)
+                    @Suppress("DEPRECATION")
+                    val mode = if (Build.VERSION.SDK_INT >= 29)
+                        WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                    wifiLock = wm.createWifiLock(mode, "PhoneCast").apply { acquire() }
                 }
                 val frames = enc.frames.get()
                 val bytes = enc.bytes.get()

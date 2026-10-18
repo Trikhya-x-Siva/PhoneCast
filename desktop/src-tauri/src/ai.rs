@@ -399,7 +399,7 @@ impl Ai {
             "overlay",
             tauri::WebviewUrl::App("overlay.html".into()),
         )
-        .title("PhoneCast chat")
+        .title("OSSG chat")
         .inner_size(340.0, 460.0)
         .min_inner_size(220.0, 160.0)
         .always_on_top(true)

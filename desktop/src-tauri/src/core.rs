@@ -767,7 +767,12 @@ impl Core {
                             .as_ref()
                             .map(|v| v.csd.clone())
                             .unwrap_or_default();
-                        sc.substitute(key, Arc::new(payload), &csd)
+                        let f = sc.substitute(key, Arc::new(payload), &csd);
+                        if sc.wants_keyframe() {
+                            drop(sc);
+                            self.request_keyframe();
+                        }
+                        f
                     }
                 };
                 self.dispatch(Media::Video { pts, key, data });
@@ -1470,7 +1475,13 @@ impl Core {
     }
 
     /// Encodes a scene from the UI's JPEG frames for the current phone picture.
-    pub fn prepare_scene(&self, name: &str, design: &str, jpegs: &[&[u8]]) -> Result<(), String> {
+    pub fn prepare_scene(
+        &self,
+        name: &str,
+        design: &str,
+        jpegs: &[&[u8]],
+        hold_at: Option<f64>,
+    ) -> Result<(), String> {
         let (key, cfg) = self.scene_key(name, design)?;
         let ffmpeg = self
             .live
@@ -1485,6 +1496,7 @@ impl Core {
             cfg.height as u32,
             hevc,
             &key.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_"),
+            hold_at,
         )?;
         diag::log(
             "scene",
@@ -1523,18 +1535,46 @@ impl Core {
                 diag::log("scene", format!("showing {n}"));
             }
             None => {
+                // With the avatar action clip ready, play it on the way back.
+                let stinger = self
+                    .scene_key("stinger", design)
+                    .ok()
+                    .and_then(|(k, _)| self.scene_cache.lock().unwrap().get(&k).cloned());
                 let mut sc = self.scene.lock().unwrap();
                 let state = std::mem::take(&mut *sc);
-                *sc = match state {
-                    SceneState::On { name, frames, next } => {
+                let mut ask_now = true;
+                *sc = match (state, stinger) {
+                    (SceneState::On { name, .. }, Some(frames)) => {
+                        // The hold starts at the clip's second keyframe.
+                        let hold_from = frames
+                            .iter()
+                            .skip(1)
+                            .position(|f| f.0)
+                            .map(|i| i + 1)
+                            .unwrap_or(0);
+                        diag::log(
+                            "scene",
+                            format!("back to the game from {name} via the action clip"),
+                        );
+                        ask_now = false; // asked just before the hold
+                        SceneState::Stinger {
+                            frames,
+                            next: 0,
+                            hold_from,
+                            asked: false,
+                        }
+                    }
+                    (SceneState::On { name, frames, next }, None) => {
                         diag::log("scene", format!("back to the game from {name}"));
                         SceneState::Leaving { name, frames, next }
                     }
-                    other => other,
+                    (other, _) => other,
                 };
                 drop(sc);
-                // The game comes back on the phone's next keyframe.
-                self.request_keyframe();
+                if ask_now {
+                    // The game comes back on the phone's next keyframe.
+                    self.request_keyframe();
+                }
             }
         }
         Ok(())

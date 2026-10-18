@@ -961,6 +961,10 @@ function renderReplay(r) {
 // (4 s loop, 30 fps), encoded once by Rust into the phone's own format,
 // then switched on and off instantly.
 let currentScene = null;
+// The scene asked for; shown as soon as the phone streams (and again after
+// the phone reconnects or rotates), until "Back to game".
+let wantedScene = null;
+let applying = false;
 async function prepareScene(name) {
   const v = window.lastStatus && window.lastStatus.video;
   if (!v) throw new Error("Start streaming on the phone first");
@@ -971,10 +975,12 @@ async function prepareScene(name) {
   c.width = v.width;
   c.height = v.height;
   const g = c.getContext("2d");
-  const n = BannerArt.SCENE_SECONDS * BannerArt.FPS;
+  const action = name === "stinger";
+  const n = (action ? BannerArt.STINGER_SECONDS : BannerArt.SCENE_SECONDS) * BannerArt.FPS;
   const frames = [];
   for (let i = 0; i < n; i++) {
-    BannerArt.scene(g, c.width, c.height, spec, name, i / n);
+    if (action) BannerArt.stinger(g, c.width, c.height, spec, i / n);
+    else BannerArt.scene(g, c.width, c.height, spec, name, i / n);
     frames.push(await new Promise((ok) => c.toBlob(async (b) => ok(new Uint8Array(await b.arrayBuffer())), "image/jpeg", 0.92)));
   }
   const body = new Uint8Array(frames.reduce((a, f) => a + f.length, 0));
@@ -983,8 +989,21 @@ async function prepareScene(name) {
     body.set(f, at);
     at += f.length;
   }
-  await invoke("prepare_scene", body, { headers: { "x-sizes": frames.map((f) => f.length).join(","), "x-name": name, "x-design": design } });
+  const headers = { "x-sizes": frames.map((f) => f.length).join(","), "x-name": name, "x-design": design };
+  if (action) headers["x-hold"] = String(BannerArt.STINGER_HOLD_AT);
+  await invoke("prepare_scene", body, { headers });
   return design;
+}
+async function showScene(name) {
+  applying = true;
+  try {
+    const design = await prepareScene(name);
+    await invoke("set_scene", { name, design });
+    // Have the action clip ready for "Back to game".
+    prepareScene("stinger").catch(() => {});
+  } finally {
+    applying = false;
+  }
 }
 for (const b of document.querySelectorAll(".scene")) {
   b.addEventListener("click", async () => {
@@ -992,13 +1011,19 @@ for (const b of document.querySelectorAll(".scene")) {
     b.classList.add("busy");
     try {
       if (name) {
+        wantedScene = name;
+        if (!(window.lastStatus && window.lastStatus.video)) {
+          toast(`${b.textContent} will show as soon as the phone starts streaming`);
+          renderScene(window.lastStatus || {});
+          return;
+        }
         const first = !(await invoke("scene_ready", { name, design: window.bannerDesignKey() }));
         if (first) toast("Preparing the scene (first time takes a few seconds)…");
-        const design = await prepareScene(name);
-        await invoke("set_scene", { name, design });
+        await showScene(name);
         toast(`${b.textContent} is on`);
       } else {
-        await invoke("set_scene", { name: null, design: "" });
+        wantedScene = null;
+        await invoke("set_scene", { name: null, design: window.bannerDesignKey() });
         toast("Back to the game");
       }
     } catch (e) {
@@ -1009,7 +1034,11 @@ for (const b of document.querySelectorAll(".scene")) {
   });
 }
 function renderScene(s) {
-  const on = s.scene || null;
+  // A wanted scene comes (back) on by itself once the phone streams.
+  if (wantedScene && !s.scene && s.video && !applying) {
+    showScene(wantedScene).catch((e) => toast(String(e.message || e)));
+  }
+  const on = s.scene === "stinger" ? null : s.scene || wantedScene || null;
   if (on === currentScene) return;
   currentScene = on;
   for (const b of document.querySelectorAll(".scene")) b.classList.toggle("on", (b.dataset.scene || null) === on && !!on);

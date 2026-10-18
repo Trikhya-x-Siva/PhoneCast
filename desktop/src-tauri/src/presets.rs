@@ -226,6 +226,20 @@ const YOUTUBE: &[Preset] = &[
         None,
         AAC_YT,
     ),
+    // For uploads around 20-30 Mbps: YouTube serves 1440p streams with its
+    // higher-quality encodes (VP9/AV1), which look sharper even to 1080p
+    // viewers. Below YouTube's recommended 24 Mbps (minimum is 6), so Studio
+    // shows a "lower than recommended" note; the stream works.
+    p(
+        "yt-1440p60-hevc-lite",
+        "1440p60 HEVC · 14 Mbps (sharper on YouTube; Studio shows a bitrate note)",
+        Codec::Hevc,
+        P1440,
+        14_000,
+        "main",
+        None,
+        AAC_YT,
+    ),
     p(
         "yt-1080p60-h264",
         "1080p60 H.264 · 17 Mbps",
@@ -1148,7 +1162,7 @@ mod tests {
 
     #[test]
     fn youtube_presets_never_trigger_lower_than_recommended() {
-        for pr in YOUTUBE {
+        for pr in YOUTUBE.iter().filter(|p| !p.id.ends_with("-lite")) {
             let (min, rec) = youtube_range(pr.codec, pr.h, pr.fps).unwrap();
             assert!(pr.kbps >= rec, "{} is below YouTube's recommended", pr.id);
             assert!(pr.kbps >= min);

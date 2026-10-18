@@ -317,7 +317,8 @@
   // The banner design, for scenes drawn in the same style.
   window.getBannerSpec = () => bn;
   window.bannerDesignKey = () => {
-    const str = JSON.stringify([bn.style, bn.title, bn.line, bn.right, bn.color, bn.color2, bn.logo ? bn.logo.src.length + bn.logo.src.slice(-64) : ""]);
+    const sig = (i) => (i ? i.src.length + i.src.slice(-48) : "");
+    const str = JSON.stringify([bn.style, bn.title, bn.line, bn.right, bn.color, bn.color2, sig(bn.logo), sig(bn.sceneBg), sig(bn.stripBg), sig(bn.poseWave), sig(bn.poseShush)]);
     let h = 2166136261;
     for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
     return (h >>> 0).toString(36);
@@ -341,7 +342,8 @@
     off.width = canvas.width;
     off.height = H;
     const g = off.getContext("2d");
-    const spec = { style: bn.style, title: bn.title, line: bn.line, right: bn.right, color: bn.color, color2: bn.color2, logo: bn.logo ? bn.logo.src : null, image: bn.image ? bn.image.src : null };
+    const src = (i) => (i ? i.src : null);
+    const spec = { style: bn.style, title: bn.title, line: bn.line, right: bn.right, color: bn.color, color2: bn.color2, logo: src(bn.logo), image: src(bn.image), sceneBg: src(bn.sceneBg), stripBg: src(bn.stripBg), poseWave: src(bn.poseWave), poseShush: src(bn.poseShush) };
     BannerArt.draw(g, off.width, H, bn, 0);
     const first = await toPng(off);
     await invoke("save_banner", { png: Array.from(first), spec });
@@ -401,6 +403,9 @@
     Object.assign(bn, { style: s.style || "blitz", title: s.title || "", line: s.line || "", right: s.right ?? "BGMI LIVE", color: s.color || "#8b5cf6", color2: s.color2 || "#22d3ee" });
     if (s.logo) bn.logo = await loadImage(s.logo).catch(() => null);
     if (s.image) bn.image = await loadImage(s.image).catch(() => null);
+    for (const k of ["sceneBg", "stripBg", "poseWave", "poseShush"]) {
+      if (s[k]) bn[k] = await loadImage(s[k]).catch(() => null);
+    }
     $("bnTitle").value = bn.title;
     $("bnLine").value = bn.line;
     $("bnRight").value = bn.right;

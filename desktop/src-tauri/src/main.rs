@@ -262,7 +262,9 @@ fn prepare_scene(core: CoreState, request: tauri::ipc::Request<'_>) -> Result<()
         frames.push(&body[at..at + n]);
         at += n;
     }
-    core.prepare_scene(&h("x-name"), &h("x-design"), &frames)
+    // Action clip: a second keyframe where its hold starts (x-hold, seconds).
+    let hold = h("x-hold").parse::<f64>().ok().filter(|t| *t > 0.0);
+    core.prepare_scene(&h("x-name"), &h("x-design"), &frames, hold)
 }
 
 #[tauri::command]

@@ -35,6 +35,35 @@
     g.drawImage(img, sx, sy, sz, sz, x, y, d, d);
   }
 
+  // Draws an image to cover (x, y, w, h), centred on (fx, fy) of the image.
+  function cover(g, img, x, y, w, h, zoom = 1, fx = 0.5, fy = 0.5) {
+    const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    const k = Math.max(w / iw, h / ih) * zoom;
+    const dw = iw * k, dh = ih * k;
+    g.drawImage(img, x + (w - dw) * fx, y + (h - dh) * fy, dw, dh);
+  }
+
+  // A character pose (transparent PNG) standing at the bottom-left, with a
+  // soft glow behind it and a gentle breathing bob.
+  function pose(g, img, cx, bottom, height, s, t, slide = 0, alpha = 1) {
+    const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    const h = height * (1 + 0.012 * Math.sin(t * TAU));
+    const w = (iw / ih) * h;
+    const x = cx - w / 2 + slide, y = bottom - h + Math.sin(t * TAU) * height * 0.01;
+    const glow = g.createRadialGradient(cx + slide, bottom - h * 0.45, 0, cx + slide, bottom - h * 0.45, h * 0.7);
+    glow.addColorStop(0, s.color2 + "55");
+    glow.addColorStop(0.5, s.color + "22");
+    glow.addColorStop(1, s.color + "00");
+    g.save();
+    g.globalAlpha = alpha;
+    g.fillStyle = glow;
+    g.fillRect(x - w * 0.4, y - h * 0.2, w * 1.8, h * 1.3);
+    g.shadowColor = s.color2;
+    g.shadowBlur = height * 0.04;
+    g.drawImage(img, x, y, w, h);
+    g.restore();
+  }
+
   // Jagged electric arc between two points.
   function arc(g, x1, y1, x2, y2, seed, jag) {
     g.beginPath();
@@ -224,6 +253,16 @@
     bg.addColorStop(1, "#120a24");
     g.fillStyle = bg;
     g.fillRect(0, 0, W, H);
+    if (s.stripBg) {
+      // The channel's lightning strip art, drifting slowly, darkened on the
+      // left so the name stays readable.
+      cover(g, s.stripBg, 0, 0, W, H, 1.06, 0.5 + 0.03 * Math.sin(t * TAU), 0.55);
+      const shade = g.createLinearGradient(0, 0, W * 0.6, 0);
+      shade.addColorStop(0, "rgba(5,7,16,0.82)");
+      shade.addColorStop(1, "rgba(5,7,16,0.15)");
+      g.fillStyle = shade;
+      g.fillRect(0, 0, W, H);
+    }
     for (const [x, col] of [[W * 0.12, c1], [W * 0.88, c2]]) {
       const r = g.createRadialGradient(x, H * 0.6, 0, x, H * 0.6, W * 0.32);
       r.addColorStop(0, col + "44");
@@ -377,6 +416,12 @@
     bg.addColorStop(1, "#150a28");
     g.fillStyle = bg;
     g.fillRect(0, 0, W, H);
+    if (s.sceneBg) {
+      // Slow push-in on the channel's lightning art (loops seamlessly).
+      cover(g, s.sceneBg, 0, 0, W, H, 1.05 + 0.03 * Math.sin(t * TAU), 0.5, 0.5);
+      g.fillStyle = "rgba(4,6,14,0.35)";
+      g.fillRect(0, 0, W, H);
+    }
     for (const [x, y, col, k] of [[0.22, 0.5, c1, 1], [0.85, 0.2, c2, 0.8], [0.75, 0.95, c1, 0.6]]) {
       const pr = 0.85 + 0.15 * Math.sin(t * TAU + x * 10);
       const r = g.createRadialGradient(W * x, H * y, 0, W * x, H * y, W * 0.45 * pr);
@@ -408,10 +453,12 @@
       g.arc(px, py, 1.5 + rand(i + 3) * 3, 0, TAU);
       g.fill();
     }
-    // Avatar, big, left of centre.
+    // The character: a full pose when one is set, else the avatar ring.
     const d = Math.min(H * 0.56, W * 0.3);
     const ax = W * 0.27, ay = H * 0.5 + (name === "brb" ? Math.sin(t * TAU) * H * 0.015 : 0);
-    avatar(g, ax, ay, d, s, t);
+    const p = name === "brb" ? s.poseShush || s.poseWave : s.poseWave || s.poseShush;
+    if (p) pose(g, p, W * 0.24, H, H * 0.92, s, t);
+    else avatar(g, ax, ay, d, s, t);
     // Title.
     const tx = W * 0.27 + d * 0.75;
     const titleSize = Math.round(Math.min(H * 0.13, (W - tx - W * 0.05) / (sc.title.length * 0.62)));
@@ -491,6 +538,116 @@
     return !s.image && s.style !== "clean";
   }
 
+  // The 3 s "action" clip played on the way back to the game, then 1 s of
+  // a still full-screen frame (looped until the game's next keyframe).
+  // t = 0..1 over 4 s.
+  const STINGER_SECONDS = 4, STINGER_HOLD_AT = 3;
+  function stinger(g, W, H, s, t) {
+    const sec = t * STINGER_SECONDS;
+    const c1 = s.color, c2 = s.color2;
+    const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+    g.save();
+    g.clearRect(0, 0, W, H);
+    g.textBaseline = "alphabetic";
+    const bg = g.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, "#05070f");
+    bg.addColorStop(1, "#140a26");
+    g.fillStyle = bg;
+    g.fillRect(0, 0, W, H);
+    if (s.sceneBg) cover(g, s.sceneBg, 0, 0, W, H, 1.15 - 0.1 * Math.min(1, sec / 3), 0.5, 0.5);
+    // Lightning bolts crack across the screen in the first second.
+    g.lineCap = "round";
+    for (let b = 0; b < 3; b++) {
+      const at = 0.1 + b * 0.25, k = Math.max(0, 1 - Math.abs(sec - at) / 0.18);
+      if (k <= 0) continue;
+      g.strokeStyle = `rgba(255,255,255,${0.95 * k})`;
+      g.shadowColor = b % 2 ? c1 : c2;
+      g.shadowBlur = H * 0.05;
+      g.lineWidth = H * 0.008;
+      arc(g, W * (0.1 + 0.35 * b), 0, W * (0.3 + 0.3 * b), H, 40 + b * 13, H * 0.25);
+      g.shadowBlur = 0;
+    }
+    // White flash at the start.
+    const flash = Math.max(0, 1 - sec / 0.25);
+    if (flash > 0) {
+      g.fillStyle = `rgba(230,250,255,${flash})`;
+      g.fillRect(0, 0, W, H);
+    }
+    // The character dashes in from the left with speed trails.
+    const poseImg = s.poseWave || s.poseShush;
+    const inK = ease((sec - 0.15) / 0.55);
+    if (poseImg && sec < 3) {
+      const slide = (1 - inK) * -W * 0.6;
+      for (let i = 3; i >= 1; i--) {
+        if (inK >= 1) break;
+        pose(g, poseImg, W * 0.27, H, H * 0.95, s, t, slide - i * W * 0.05, 0.15 * (1 - inK));
+      }
+      pose(g, poseImg, W * 0.27, H, H * 0.95, s, t, slide, 1);
+    } else if (sec < 3) {
+      avatar(g, W * 0.27 + (1 - inK) * -W * 0.5, H / 2, H * 0.6, s, t * 4);
+    }
+    // "BACK IN ACTION" slams in with a little shake.
+    if (sec > 0.6 && sec < 3) {
+      const k = ease((sec - 0.6) / 0.25);
+      const sc = 1.6 - 0.6 * k;
+      const shake = sec < 1.0 ? Math.sin(sec * 90) * H * 0.006 * (1 - k * 0.5) : 0;
+      const size = Math.round(H * 0.13);
+      g.save();
+      g.translate(W * 0.68 + shake, H * 0.5);
+      g.scale(sc, sc);
+      g.globalAlpha = Math.min(1, k * 1.5);
+      g.font = `italic 900 ${size}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+      g.textAlign = "center";
+      const grad = g.createLinearGradient(-W * 0.25, 0, W * 0.25, 0);
+      grad.addColorStop(0, "#ffffff");
+      grad.addColorStop(1, c2);
+      g.shadowColor = c1;
+      g.shadowBlur = H * 0.05;
+      g.fillStyle = grad;
+      g.fillText("BACK IN", 0, -size * 0.1);
+      g.fillText("ACTION", 0, size * 0.95);
+      g.shadowBlur = 0;
+      g.font = `700 ${Math.round(size * 0.28)}px "Segoe UI", system-ui, sans-serif`;
+      g.fillStyle = "#c9cfe8";
+      g.fillText((s.title || "") + (s.right ? "  ·  " + s.right : ""), 0, size * 1.45);
+      g.restore();
+    }
+    // Diagonal violet→cyan wipe covers the screen from 2.5 s.
+    const wipe = ease((sec - 2.5) / 0.45);
+    if (wipe > 0) {
+      const grad = g.createLinearGradient(0, 0, W, H);
+      grad.addColorStop(0, c1);
+      grad.addColorStop(1, c2);
+      g.fillStyle = grad;
+      g.beginPath();
+      const x = -W * 0.3 + wipe * W * 1.6;
+      g.moveTo(x - W * 0.3, 0);
+      g.lineTo(x + W * 0.1, 0);
+      g.lineTo(x - W * 0.2, H);
+      g.lineTo(x - W * 0.6, H);
+      g.closePath();
+      g.fill();
+      if (wipe >= 1 || sec >= 2.95) {
+        g.fillRect(0, 0, W, H);
+      } else {
+        g.fillRect(0, 0, Math.max(0, x - W * 0.6), H);
+      }
+    }
+    // Hold (3..4 s): one still frame, so it loops cleanly.
+    if (sec >= STINGER_HOLD_AT) {
+      const grad = g.createLinearGradient(0, 0, W, H);
+      grad.addColorStop(0, c1);
+      grad.addColorStop(1, c2);
+      g.fillStyle = grad;
+      g.fillRect(0, 0, W, H);
+      g.font = `italic 900 ${Math.round(H * 0.09)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+      g.textAlign = "center";
+      g.fillStyle = "rgba(255,255,255,0.92)";
+      g.fillText(s.title || "", W / 2, H * 0.53);
+    }
+    g.restore();
+  }
+
   function scene(g, W, H, s, name, t) {
     g.save();
     g.clearRect(0, 0, W, H);
@@ -509,5 +666,5 @@
     draw(g, W, H, s, t, p);
   }
 
-  window.BannerArt = { draw, bannerAt, scene, animated, LOOP_SECONDS, BANNER_LOOP_SECONDS, FPS, SCENE_SECONDS: 4 };
+  window.BannerArt = { draw, bannerAt, scene, stinger, animated, LOOP_SECONDS, BANNER_LOOP_SECONDS, FPS, SCENE_SECONDS: 4, STINGER_SECONDS, STINGER_HOLD_AT };
 })();

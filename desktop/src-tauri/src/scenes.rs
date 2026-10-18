@@ -38,6 +38,15 @@ pub enum SceneState {
         frames: Arc<Vec<Frame>>,
         next: usize,
     },
+    /// The 3 s avatar "action" clip on the way back to the game: plays once,
+    /// then holds its last part (from the keyframe at `hold_from`) until the
+    /// phone's next keyframe, which is asked for just before the hold.
+    Stinger {
+        frames: Arc<Vec<Frame>>,
+        next: usize,
+        hold_from: usize,
+        asked: bool,
+    },
 }
 
 impl SceneState {
@@ -45,14 +54,40 @@ impl SceneState {
         match self {
             SceneState::Off => None,
             SceneState::On { name, .. } | SceneState::Leaving { name, .. } => Some(name),
+            SceneState::Stinger { .. } => Some("stinger"),
         }
+    }
+
+    /// True once, about 1/3 s before a stinger reaches its hold: time to ask
+    /// the phone for the keyframe the game comes back on.
+    pub fn wants_keyframe(&mut self) -> bool {
+        if let SceneState::Stinger {
+            next,
+            hold_from,
+            asked,
+            ..
+        } = self
+        {
+            if !*asked && *next + 20 >= *hold_from {
+                *asked = true;
+                return true;
+            }
+        }
+        false
     }
 
     /// The frame to send for one phone frame. `phone_csd` is the phone's
     /// codec setup (SPS/PPS), sent again with the first phone keyframe after
     /// a scene, because the scene's own setup replaced it in the decoder.
     pub fn substitute(&mut self, key: bool, data: Arc<Vec<u8>>, phone_csd: &[u8]) -> Frame {
-        let leave_now = matches!(self, SceneState::Leaving { .. }) && key;
+        let leave_now = key
+            && match self {
+                SceneState::Leaving { .. } => true,
+                SceneState::Stinger {
+                    next, hold_from, ..
+                } => *next >= *hold_from,
+                _ => false,
+            };
         if leave_now {
             *self = SceneState::Off;
             let mut v = Vec::with_capacity(phone_csd.len() + data.len());
@@ -65,6 +100,19 @@ impl SceneState {
             SceneState::On { frames, next, .. } | SceneState::Leaving { frames, next, .. } => {
                 let f = frames[*next].clone();
                 *next = (*next + 1) % frames.len();
+                f
+            }
+            SceneState::Stinger {
+                frames,
+                next,
+                hold_from,
+                ..
+            } => {
+                let f = frames[*next].clone();
+                *next += 1;
+                if *next >= frames.len() {
+                    *next = *hold_from; // hold: loop the last part
+                }
                 f
             }
         }
@@ -121,6 +169,7 @@ pub fn encode(
     h: u32,
     hevc: bool,
     tag: &str,
+    keyframe_at: Option<f64>,
 ) -> Result<Vec<Frame>, String> {
     let dir = scenes_dir().join(format!("tmp-{tag}"));
     std::fs::remove_dir_all(&dir).ok();
@@ -235,8 +284,11 @@ pub fn encode(
         ])
         .arg(dir.join("%03d.jpg"))
         .args(["-vf", &vf])
-        .args(args)
-        .arg(&out);
+        .args(args);
+        if let Some(t) = keyframe_at {
+            cmd.args(["-force_key_frames", &format!("0,{t:.3}")]);
+        }
+        cmd.arg(&out);
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000);
         match cmd.output() {
@@ -393,7 +445,7 @@ mod decode_tests {
             .map(|i| std::fs::read(jdir.join(format!("{i:03}.jpg"))).unwrap())
             .collect();
         let refs: Vec<&[u8]> = jpegs.iter().map(|j| j.as_slice()).collect();
-        let frames = encode(&ffmpeg, &refs, 1920, 872, false, "test").unwrap();
+        let frames = encode(&ffmpeg, &refs, 1920, 872, false, "test", None).unwrap();
         assert!(frames[0].0 && frames.len() >= 200, "{}", frames.len());
 
         let cfg = VideoConfig {
@@ -464,5 +516,42 @@ mod decode_tests {
             .unwrap();
         println!("sent {sent}, decoded {n}");
         assert_eq!(n, sent);
+    }
+}
+
+#[cfg(test)]
+mod stinger_tests {
+    use super::*;
+
+    #[test]
+    fn stinger_plays_once_holds_and_returns_on_phone_keyframe() {
+        let fr = |k: bool, b: u8| (k, Arc::new(vec![b]));
+        // 0..3 action (keyframe at 0), 3..5 hold (keyframe at 3)
+        let frames = Arc::new(vec![
+            fr(true, 0),
+            fr(false, 1),
+            fr(false, 2),
+            fr(true, 3),
+            fr(false, 4),
+        ]);
+        let mut st = SceneState::Stinger {
+            frames,
+            next: 0,
+            hold_from: 3,
+            asked: false,
+        };
+        let p = |b: u8| Arc::new(vec![b]);
+        assert!(st.wants_keyframe()); // short clip: ask at once
+        assert!(!st.wants_keyframe());
+        // A phone keyframe during the action does not cut it short.
+        assert_eq!(*st.substitute(true, p(9), b"C").1, vec![0]);
+        assert_eq!(*st.substitute(false, p(9), b"C").1, vec![1]);
+        assert_eq!(*st.substitute(false, p(9), b"C").1, vec![2]);
+        assert_eq!(*st.substitute(false, p(9), b"C").1, vec![3]);
+        assert_eq!(*st.substitute(false, p(9), b"C").1, vec![4]);
+        assert_eq!(*st.substitute(false, p(9), b"C").1, vec![3]); // hold loops
+        let (k, d) = st.substitute(true, p(7), b"C");
+        assert!(k && &d[..] == b"C\x07");
+        assert!(matches!(st, SceneState::Off));
     }
 }
