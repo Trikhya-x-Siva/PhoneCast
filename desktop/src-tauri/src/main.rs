@@ -505,6 +505,12 @@ fn set_banner_moments(auto: bool, every: u64, names: Vec<String>) {
     banner_feed::set_auto(auto, every, names);
 }
 
+/// Pure 1080p60 mode on/off.
+#[tauri::command(async)]
+fn set_pure_mode(core: CoreState, on: bool) {
+    core.set_pure(on);
+}
+
 /// Banner on (true) or the plain strip (false), live: no restart.
 #[tauri::command(async)]
 fn set_banner_on(core: CoreState, on: bool) {
@@ -1026,6 +1032,7 @@ fn main() {
             show_banner_moment,
             set_banner_moments,
             set_banner_on,
+            set_pure_mode,
             save_banner,
             get_banner_asset,
             save_banner_asset,

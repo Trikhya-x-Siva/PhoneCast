@@ -72,7 +72,8 @@ impl Ai {
             modlog: Mutex::new(VecDeque::new()),
             generation: Mutex::new(0),
         });
-        if ai.enabled() {
+        // Pure mode: no AI helper at all (no CPU while streaming).
+        if ai.enabled() && !crate::live::pure() {
             let a = ai.clone();
             std::thread::Builder::new()
                 .name("ai-start".into())

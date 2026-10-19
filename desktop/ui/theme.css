@@ -144,3 +144,11 @@ dl dt { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; t
 @media (prefers-reduced-motion: reduce) {
   * { transition-duration: 0ms !important; animation-duration: 0ms !important; }
 }
+
+/* Pure 1080p60 mode: only what the stream needs is on screen. */
+body.pure #quickBanner, body.pure #aiCard, body.pure #program, body.pure #sceneCover,
+body.pure aside > .card:has(#sceneRow), body.pure aside > .card:has(.clip-row) { display: none !important; }
+body.pure .side-tabs { display: none; }
+body.pure aside > .card[data-tab] { display: block; }
+body.pure aside > .card.hidden { display: none !important; }
+.pure-line { margin: 0 0 10px; font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }

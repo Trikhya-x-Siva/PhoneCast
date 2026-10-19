@@ -34,6 +34,8 @@ pub struct Prefs {
     pub privacy_cover: bool,
     /// Banner strip shown (on) or a plain strip (off); switchable live.
     pub banner_on: bool,
+    /// Pure 1080p60 mode (see live::PURE).
+    pub pure: bool,
 }
 
 impl Default for Prefs {
@@ -47,6 +49,7 @@ impl Default for Prefs {
             game_16x9: false,
             privacy_cover: true,
             banner_on: true,
+            pure: true,
         }
     }
 }

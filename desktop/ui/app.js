@@ -266,6 +266,10 @@ function render(s) {
   $("screen").classList.toggle("recording", recording);
   $("recBadge").classList.toggle("hidden", !recording);
   if (recording) $("recTime").textContent = fmtTime(s.recording.seconds);
+  // Pure 1080p60: the extras are hidden (and not worked on).
+  window.PURE = s.pure !== false;
+  document.body.classList.toggle("pure", window.PURE);
+  if (document.activeElement !== $("pureToggle")) $("pureToggle").checked = window.PURE;
   renderAlerts(s);
   renderProgram(s);
   renderStatusBar(s);
@@ -795,6 +799,13 @@ function renderAlerts(s) {
   set("hot", !!ph.heatLimited, { level: "warn", text: "The phone is hot: OSSG lowered its quality until it cools down." });
 }
 
+// Pure mode switch.
+$("pureToggle").addEventListener("change", (e) => {
+  invoke("set_pure_mode", { on: e.target.checked })
+    .then(() => toast(e.target.checked ? "Pure 1080p60 on (next stream)" : "Pure mode off: extras are back (next stream)"))
+    .catch((err) => toast(String(err)));
+});
+
 // ---------------- side panel: Live / Setup ----------------
 // Live = what you touch mid-stream; Setup = everything else. Going live
 // switches to Live.
@@ -872,7 +883,7 @@ requestAnimationFrame(programLoop);
 // Scene tiles get a small picture of the scene.
 let thumbsKey = "";
 function drawSceneThumbs() {
-  if (!window.BannerArt || !window.bannerReady) return;
+  if (window.PURE || !window.BannerArt || !window.bannerReady) return;
   const key = window.bannerDesignKey();
   if (key === thumbsKey) return;
   thumbsKey = key;
@@ -1254,7 +1265,7 @@ function renderPrivacy(s) {
   else if (!app) hint = "Waiting for the phone to report its screen (needs the new phone app over USB once).";
   else hint = `On the phone now: ${app.label || app.pkg}${app.game ? " (game)" : " (not a game: covered)"}`;
   $("privacyHint").textContent = hint;
-  if (p.on && window.bannerReady && !applying && performance.now() - privacyPrepTry > 10000) {
+  if (!window.PURE && p.on && window.bannerReady && !applying && performance.now() - privacyPrepTry > 10000) {
     privacyPrepTry = performance.now();
     // Every scene ready before it is clicked: a click then switches at
     // once instead of making the scene first (seconds, while live).

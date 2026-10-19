@@ -323,6 +323,12 @@ class Rig:
             off = wait(lambda: not (self.app.status().get("bannerMoment") or {}).get("playing"), 8)
             self.check(f"pop-up {name} done #{i+1}", off)
 
+    def steady(self):
+        """Just the game, as in pure 1080p60 mode: nothing switched."""
+        time.sleep(120)
+        st = self.app.status()
+        self.check("still live after 2 min", st.get("outputsRunning"))
+
     def switch(self):
         for i in range(max(3, self.rounds // 3)):
             r = self.app.cmd("live switch")
@@ -360,7 +366,8 @@ def main():
         phone.connect()
         phone.foreground("com.pubg.imobile", True)
         rig.check("phone connected", wait(lambda: app.status().get("connected"), 15))
-        for name in ["starting", "brb", "thanks", "stinger"]:
+        # Pure mode makes no scenes; neither does a steady-only run.
+        for name in ([] if a.only == "steady" else ["starting", "brb", "thanks", "stinger"]):
             app.cmd(f"prepare {name}")
             rig.check(f"{name} ready", wait(lambda: app.cmd(f"ready {name}").get("ready"), 90, 1))
         r = app.cmd("live start")

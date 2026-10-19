@@ -523,6 +523,15 @@ pub struct Dest {
     pub stop: Arc<AtomicBool>,
 }
 
+/// Pure 1080p60: only the game, true pixels with black bars, 1080p60 H.264
+/// 8 Mbps to YouTube; banner, scenes, pop-ups, privacy cover, AI and the
+/// replay buffer stay off (they come back one by one later).
+pub static PURE: AtomicBool = AtomicBool::new(true);
+
+pub fn pure() -> bool {
+    PURE.load(Ordering::SeqCst)
+}
+
 /// Set while the stream's settings are being switched live: jobs then end
 /// by dropping the connection (no RTMP "unpublish"), so YouTube and the
 /// others keep the broadcast open and the new encoders reconnect into it.
@@ -742,7 +751,11 @@ impl Live {
         let mut inputs = s.inputs();
         if pc.is_none() {
             for i in &mut inputs {
-                i.preset = presets::at_most_1080(i.platform, &i.preset).into();
+                i.preset = if pure() && i.platform == Platform::Youtube {
+                    "yt-1080p60-h264-8m".into()
+                } else {
+                    presets::at_most_1080(i.platform, &i.preset).into()
+                };
             }
         }
         let budget = (*self.budget_override.lock().unwrap()).or(s.upload_mbps);
@@ -818,6 +831,8 @@ impl Live {
             // Phone shape only where the platform shows any shape (YouTube,
             // custom servers) and only for the phone picture.
             let framing = match Framing::parse(&s.framing) {
+                // Pure: the game at its own pixels, black bars, nothing added.
+                _ if pure() && pf != Platform::YoutubeVertical => Framing::Fit,
                 // The vertical feed always gets the vertical picture.
                 _ if pf == Platform::YoutubeVertical && pc.is_none() => Framing::Vertical(
                     vertical_game_height(p.w, config.width as u32, config.height as u32),

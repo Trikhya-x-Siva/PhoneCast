@@ -250,6 +250,18 @@ const YOUTUBE: &[Preset] = &[
         None,
         AAC_YT,
     ),
+    // Pure mode: the references' recipe for a steady 1080p60 on a modest
+    // upload (H.264, CBR, 2 s keyframes); YouTube's minimum is 6 Mbps.
+    p(
+        "yt-1080p60-h264-8m",
+        "1080p60 H.264 · 8 Mbps (steady)",
+        Codec::H264,
+        P1080,
+        8_000,
+        "high",
+        None,
+        AAC_YT,
+    ),
     p(
         "yt-1080p60-hevc",
         "1080p60 HEVC · 12 Mbps (slower upload)",
@@ -1180,7 +1192,9 @@ mod tests {
 
     #[test]
     fn youtube_presets_never_trigger_lower_than_recommended() {
-        for pr in YOUTUBE.iter().filter(|p| !p.id.ends_with("-lite")) {
+        // "-lite" and the steady 8 Mbps one sit below the recommendation on
+        // purpose (above YouTube's minimum): they exist for modest uploads.
+        for pr in YOUTUBE.iter().filter(|p| !p.id.ends_with("-lite") && !p.id.ends_with("-8m")) {
             let (min, rec) = youtube_range(pr.codec, pr.h, pr.fps).unwrap();
             assert!(pr.kbps >= rec, "{} is below YouTube's recommended", pr.id);
             assert!(pr.kbps >= min);
@@ -1436,7 +1450,7 @@ mod tests {
         );
         assert_eq!(
             recommend(Platform::Youtube, 12.0, true).id,
-            "yt-720p60-h264"
+            "yt-1080p60-h264-8m"
         );
         assert_eq!(recommend(Platform::Twitch, 20.0, false).id, "tw-1080p60");
         assert_eq!(recommend(Platform::Twitch, 7.0, false).id, "tw-720p60");
@@ -1479,10 +1493,15 @@ mod tests {
 
     #[test]
     fn phone_streams_stay_at_most_1080p() {
-        assert_eq!(at_most_1080(Platform::Youtube, "yt-1440p60-hevc"), "yt-1080p60-hevc");
-        assert_eq!(at_most_1080(Platform::Youtube, "yt-1080p60-hevc"), "yt-1080p60-hevc");
+        assert_eq!(
+            at_most_1080(Platform::Youtube, "yt-1440p60-hevc"),
+            "yt-1080p60-hevc"
+        );
+        assert_eq!(
+            at_most_1080(Platform::Youtube, "yt-1080p60-hevc"),
+            "yt-1080p60-hevc"
+        );
         let p = Platform::Youtube.preset(at_most_1080(Platform::Youtube, "yt-1440p60-hevc-lite"));
         assert!(p.h <= 1080 && p.fps == 60, "{}", p.id);
     }
-
 }

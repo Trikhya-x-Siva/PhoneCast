@@ -70,8 +70,11 @@ class VideoEncoder(
             // clips and scenes catch up on these instead of asking for extra
             // ones, which cost the stream quality.
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-            // 0 = realtime priority.
+            // 0 = realtime priority, at the rate we need: without an operating
+            // rate a realtime encoder clocks up to its maximum (heat for
+            // nothing); 60 fps is all the stream uses.
             setInteger(MediaFormat.KEY_PRIORITY, 0)
+            setInteger(MediaFormat.KEY_OPERATING_RATE, fps)
             setInteger(MediaFormat.KEY_LATENCY, 1)
             // No B-frames: they make the decoder hold frames back (delay + judder).
             setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)

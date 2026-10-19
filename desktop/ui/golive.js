@@ -333,6 +333,8 @@
   // stream plays under the game.
   let saving = Promise.resolve();
   function saveBannerSoon() {
+    // Pure 1080p60: no banner is streamed, so none is made (no CPU/heat).
+    if (window.PURE !== false && document.body.classList.contains("pure")) return;
     drawBanner();
     startPreview();
     clearTimeout(bnSaveTimer);

@@ -174,6 +174,7 @@ impl Core {
     pub fn start(app: AppHandle) -> std::io::Result<Arc<Core>> {
         let prefs = Prefs::load();
         crate::banner_feed::set_on(prefs.banner_on);
+        crate::live::PURE.store(prefs.pure, Ordering::SeqCst);
         let mixer = Mixer::start();
         // Devices by stable ID: the same mic and voice app as last time, or a
         // warning if the mic is gone (never a silent switch to another one).
@@ -197,7 +198,11 @@ impl Core {
             screen_preview: Mutex::new(None),
             pc_record: Mutex::new(None),
             sources_cache: Mutex::new(Value::Null),
-            replay: Mutex::new(ReplayBuffer::new(prefs.replay_seconds)),
+            replay: Mutex::new(ReplayBuffer::new(if prefs.pure {
+                0
+            } else {
+                prefs.replay_seconds
+            })),
             prefs: Mutex::new(prefs),
             hotkeys: Mutex::new(None),
             device_warnings: Mutex::new(Vec::new()),
@@ -1466,6 +1471,7 @@ impl Core {
             let privacy_on = self.prefs.lock().unwrap().privacy_cover;
             let on_screen = self.phone_app.lock().unwrap().clone();
             status["bannerOn"] = json!(crate::banner_feed::is_on());
+            status["pure"] = json!(crate::live::pure());
             // The upload couldn't keep up: lower once (2-3 s pause) instead
             // of dropping picture every few seconds for the rest of the stream.
             if let Some(mbps) = self.live.lower_if_congested() {
@@ -1754,8 +1760,23 @@ impl Core {
 
     /// Tells the phone whether to hold the picture back outside games.
     fn send_phone_privacy(&self) {
-        let on = self.prefs.lock().unwrap().privacy_cover;
+        let on = self.prefs.lock().unwrap().privacy_cover && !crate::live::pure();
         self.send_phone(SET_PRIVACY, &[on as u8]);
+    }
+
+    /// Pure 1080p60 mode on/off (applies to the next stream).
+    pub fn set_pure(&self, on: bool) {
+        {
+            let mut p = self.prefs.lock().unwrap();
+            p.pure = on;
+            p.save();
+        }
+        crate::live::PURE.store(on, Ordering::SeqCst);
+        self.send_phone_privacy();
+        diag::log(
+            "live",
+            format!("pure 1080p60 mode {}", if on { "on" } else { "off" }),
+        );
     }
 
     pub fn set_banner_on(&self, on: bool) {
@@ -1792,7 +1813,7 @@ impl Core {
             format!("on screen: {pkg}{}", if game { " (game)" } else { "" }),
         );
         *self.phone_app.lock().unwrap() = Some(v);
-        if !self.prefs.lock().unwrap().privacy_cover {
+        if !self.prefs.lock().unwrap().privacy_cover || crate::live::pure() {
             return;
         }
         let design = self.ready_design("brb");
@@ -1843,7 +1864,10 @@ impl Core {
     /// Puts up Be right back by itself while live (phone gone, or not on
     /// the game), unless a scene is already on. Ended by `end_auto_cover`.
     fn auto_cover(&self, why: &str) {
-        if !self.has_outputs_running() || !self.prefs.lock().unwrap().privacy_cover {
+        if crate::live::pure()
+            || !self.has_outputs_running()
+            || !self.prefs.lock().unwrap().privacy_cover
+        {
             return;
         }
         let off = matches!(*self.scene.lock().unwrap(), crate::scenes::SceneState::Off);
