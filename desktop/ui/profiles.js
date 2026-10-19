@@ -65,7 +65,13 @@
     const v = lastVars[a.id] || {};
     const field = (key, label, ph, def = "") =>
       `<label class="field"><span>${label}</span><input class="text-in" data-var="${key}" maxlength="80" placeholder="${escapeHtml(ph)}" value="${escapeHtml(v[key] ?? def)}"></label>`;
-    let html = field("mode", "What you're doing", "e.g. Rank push, Classic, Scrims", a.mode);
+    const style = String(v.style ?? "0");
+    const styles = (a.titleOptions || []).length > 1
+      ? `<label class="field"><span>Title style</span><select class="text-in" data-var="style">
+          ${["Normal", "Hype", "Special day"].map((n, i) => `<option value="${i}"${String(i) === style ? " selected" : ""}>${n}</option>`).join("")}
+        </select></label>`
+      : "";
+    let html = styles + field("mode", "What you're doing", "e.g. Rank push, Classic, Scrims", a.mode);
     if (a.kind === "pc") html = field("game", "Game", "e.g. Valorant, GTA V, Minecraft", a.game) + html;
     if (a.kind === "rooms")
       html += field("room", "Room ID", "e.g. 1234567") + field("pass", "Password", "e.g. 2468") + field("map", "Map / mode", "e.g. Erangel · TPP squad");
@@ -85,6 +91,7 @@
     data = await invoke("save_profiles", { data: { active: b.dataset.id } });
     renderPicker();
   });
+  $("pfVars").addEventListener("change", () => $("pfVars").dispatchEvent(new Event("input")));
   $("pfVars").addEventListener("input", () => {
     const a = active();
     lastVars[a.id] = vars();
@@ -441,6 +448,10 @@
   async function openEditor(which) {
     data = await invoke("get_profiles");
     draft = JSON.parse(JSON.stringify({ defaults: data.defaults, profiles: data.profiles }));
+    for (const p of draft.profiles) {
+      const o = Array.isArray(p.titleOptions) ? p.titleOptions : [];
+      p.titleOptions = [p.title, o[1] || "", o[2] || ""];
+    }
     tab = which || "defaults";
     $("pfVarsHint").innerHTML =
       "Variables: " + data.variables.map((v) => `<code title="${escapeHtml(v.desc)}">{${v.name}}</code>`).join(" ");
@@ -476,6 +487,7 @@
       const id = `custom${Date.now().toString(36)}`;
       draft.profiles.push({
         id, name: "New profile", kind: "pc", game: "", mode: "Gameplay", title: "🔴 {game} LIVE TAMIL | {mode} 🔥 | Day {n}",
+        titleOptions: ["🔴 {game} LIVE TAMIL | {mode} 🔥 | Day {n}", "🔴 {game} LIVE TAMIL | Epic Moments! | Day {n}", "🔴 {game} LIVE TAMIL | Special Stream! | Day {n}"],
         description: "", tags: "", hashtags: "", bannerLabel: "{game}", twitch: { id: "", name: "" }, twitchTags: "Tamil",
         thumb: { headline: "{game}", subline: "{mode}", color1: "#8b5cf6", color2: "#22d3ee", useFrame: true },
         announce: false, announceText: "🔴 LIVE: {title}\n▶ {youtube}", announceEveryone: false, roomOnBanner: false,
@@ -536,7 +548,9 @@
         ${inp(`${k}.game`, "Game <code>{game}</code>", p.game, { half: true })}
         ${inp(`${k}.mode`, "Usual mode <code>{mode}</code>", p.mode, { half: true, hint: "You can change it in Go live each time" })}
       </div>
-      ${inp(`${k}.title`, "Title template", p.title, { max: 200, hint: "YouTube allows 100 characters, Twitch 140" })}
+      ${inp(`${k}.title`, "Title — normal", p.title, { max: 200, hint: "YouTube allows 100 characters, Twitch 140. Pick the style in Go live." })}
+      ${inp(`${k}.titleOptions.1`, "Title — hype", (p.titleOptions || [])[1] || "", { max: 200 })}
+      ${inp(`${k}.titleOptions.2`, "Title — special day (updates, festivals)", (p.titleOptions || [])[2] || "", { max: 200 })}
       ${inp(`${k}.description`, "Description (the shared footer is added below it)", p.description, { area: true, rows: 5 })}
       ${inp(`${k}.disclaimer`, "Disclaimer <code>{disclaimer}</code>", p.disclaimer, { area: true, rows: 2, hint: "Who owns the game, and “not an official event” for rooms. Keep it short and true." })}
       <div class="pf-grid">
@@ -728,6 +742,11 @@
   }
 
   $("pfSave").onclick = async () => {
+    // Title styles: slot 0 is always the normal title.
+    for (const p of draft.profiles) {
+      const o = Array.isArray(p.titleOptions) ? p.titleOptions : [];
+      p.titleOptions = [p.title, o[1] || "", o[2] || ""];
+    }
     try {
       data = await invoke("save_profiles", { data: { defaults: draft.defaults, profiles: draft.profiles } });
       toast("Profiles saved");

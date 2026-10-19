@@ -101,35 +101,10 @@ impl Default for Defaults {
             goal: "Road to 1K subscribers".into(),
             device: String::new(),
             pc: String::new(),
-            rules: "❌ No spam or self-promotion\n\
-                    ❌ No racism, abuse or swearing\n\
-                    ❌ No trash talk about other streamers\n\
-                    ❌ No politics or religion\n\
-                    ❌ Don't share personal info (yours or anyone's)\n\
-                    ✅ Respect the mods — their decision is final"
-                .into(),
-            footer: "👋 Welcome to {channel}! Grab a seat — let's play together 🎮\n\n\
-                     🔗 FOLLOW & CONNECT:\n\
-                     ▶ YouTube: {channel_link}\n\
-                     🟣 Twitch: {twitch}\n\
-                     📸 Instagram: {instagram}\n\
-                     💬 Discord: {discord}\n\
-                     📧 Business: {email}\n\n\
-                     💜 SUPPORT THE STREAM:\n\
-                     ⭐ Join membership: {join}\n\
-                     💬 Super Chat & Super Thanks are welcome — only if you meet the age limit. \
-                     Watching, liking and chatting is support too!\n\n\
-                     🎯 Goal: {goal}\n\
-                     📅 Schedule: {schedule}\n\n\
-                     🎮 MY SETUP:\n\
-                     📱 Phone: {device}\n\
-                     💻 PC: {pc}\n\n\
-                     ★ CHAT RULES ★\n{rules}\n\n\
-                     {disclaimer}\n\n\
-                     {tags}"
-                .into(),
-            tags: "tamil gaming, tamil live, tamil gamer, tamil live stream".into(),
-            hashtags: "#tamilgaming #tamillive".into(),
+            rules: starter_default("rules"),
+            footer: starter_default("footer"),
+            tags: starter_default("tags"),
+            hashtags: starter_default("hashtags"),
             language: "ta".into(),
             twitch_client_id: String::new(),
         }
@@ -164,6 +139,8 @@ pub struct Profile {
     pub game: String,
     pub mode: String,
     pub title: String,
+    /// Extra title styles: [normal, hype, special day]. Index 0 mirrors `title`.
+    pub title_options: Vec<String>,
     pub description: String,
     pub tags: String,
     pub hashtags: String,
@@ -203,7 +180,8 @@ pub struct Store {
 
 /// 1 = ready-made texts in English; 2 = researched South Indian style
 /// (sections, disclaimers, one profile per game).
-const TEXT_VERSION: u32 = 2;
+/// 3 = templates from starter_profiles.json with three title styles.
+const TEXT_VERSION: u32 = 3;
 
 impl Default for Store {
     fn default() -> Self {
@@ -218,6 +196,7 @@ impl Default for Store {
     }
 }
 
+#[cfg(test)]
 fn has_tamil(s: &str) -> bool {
     s.chars().any(|c| ('\u{0B80}'..='\u{0BFF}').contains(&c))
 }
@@ -234,10 +213,9 @@ fn upgrade_texts(s: &mut Store) -> bool {
     let d = Defaults::default();
     s.defaults.rules = d.rules;
     s.defaults.footer = d.footer;
-    if s.text_version < 1 || has_tamil(&s.defaults.tags) {
-        s.defaults.tags = d.tags;
-        s.defaults.hashtags = d.hashtags;
-    }
+    // The old shared tags were BGMI-flavoured; the new ones suit every game.
+    s.defaults.tags = d.tags;
+    s.defaults.hashtags = d.hashtags;
     for st in starter_profiles() {
         match s.profiles.iter_mut().find(|p| p.id == st.id) {
             Some(p) => {
@@ -271,223 +249,28 @@ fn upgrade_texts(s: &mut Store) -> bool {
     true
 }
 
+/// The ready-made profiles and shared texts, kept as data so they can be
+/// improved without touching code (see starter_profiles.json).
+const STARTERS: &str = include_str!("starter_profiles.json");
+
+fn starters_json() -> &'static Value {
+    static V: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    V.get_or_init(|| serde_json::from_str(STARTERS).expect("starter_profiles.json is valid JSON"))
+}
+
+fn starter_default(key: &str) -> String {
+    starters_json()["defaults"][key]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// Ready-made profiles, modelled on how big South Indian gaming channels
-/// write live titles and descriptions (researched Oct 2026): "🔴 GAME LIVE
-/// TAMIL | hook | Day N #tag", a short "today" block, join instructions for
-/// rooms, an honest disclaimer, 5–10 hashtags. The shared footer (links,
-/// support, setup, chat rules) is added under every description.
+/// write live titles and descriptions (researched Oct 2026, written with
+/// Gemini from that brief, then checked).
 pub fn starter_profiles() -> Vec<Profile> {
-    let thumb = |h: &str, s: &str, c1: &str, c2: &str| Thumb {
-        headline: h.into(),
-        subline: s.into(),
-        color1: c1.into(),
-        color2: c2.into(),
-        use_frame: true,
-    };
-    let cat = |name: &str| TwitchCategory {
-        id: String::new(),
-        name: name.into(),
-    };
-    let pc = |id: &str,
-              name: &str,
-              game: &str,
-              mode: &str,
-              title: &str,
-              emoji: &str,
-              about: &str,
-              tags: &str,
-              hashtags: &str,
-              banner: &str,
-              twitch: &str,
-              disclaimer: &str,
-              c1: &str,
-              c2: &str| Profile {
-        id: id.into(),
-        name: name.into(),
-        kind: "pc".into(),
-        game: game.into(),
-        mode: mode.into(),
-        title: title.into(),
-        description: format!(
-            "{emoji} {} LIVE TAMIL — {{mode}}!\n\
-             🎮 Game: {{game}} · 💻 Platform: PC · 🗣️ Language: Tamil + English\n\
-             {about}\n\
-             👇 Drop a LIKE and SUBSCRIBE if you enjoy the stream!",
-            game.to_uppercase()
-        ),
-        tags: tags.into(),
-        hashtags: hashtags.into(),
-        banner_label: banner.into(),
-        twitch: cat(twitch),
-        twitch_tags: "Tamil, PC, English".into(),
-        thumb: thumb(banner, "{mode}", c1, c2),
-        announce: true,
-        announce_text: format!(
-            "{emoji} {} LIVE: {{title}}\n▶ {{youtube}}",
-            game.to_uppercase()
-        ),
-        disclaimer: disclaimer.into(),
-        ..Default::default()
-    };
-    vec![
-        Profile {
-            id: "bgmi".into(),
-            name: "BGMI".into(),
-            kind: "phone".into(),
-            game: "BGMI".into(),
-            mode: "Rank push".into(),
-            title: "🔴 BGMI LIVE TAMIL | {mode} 🔥 | Day {n} #bgmi #bgmitamil".into(),
-            description: "🔥 BGMI LIVE TAMIL — {mode}!\n\
-                          🎮 Game: BGMI · 📱 Platform: Mobile · 🗣️ Language: Tamil + English\n\
-                          🔴 Today: {mode} · high-kill gameplay · clutches · chat with viewers\n\
-                          👇 Drop a LIKE and SUBSCRIBE if you enjoy the stream!"
-                .into(),
-            tags: "bgmi live tamil, bgmi tamil live, bgmi live, bgmi tamil, bgmi rank push, \
-                   battlegrounds mobile india, pubg mobile tamil, bgmi gameplay tamil"
-                .into(),
-            hashtags: "#bgmi #bgmilive #bgmitamil #battlegroundsmobileindia #pubgmobile".into(),
-            banner_label: "BGMI LIVE".into(),
-            twitch: cat("Battlegrounds Mobile India"),
-            twitch_tags: "Tamil, BGMI, Mobile, India, English".into(),
-            thumb: thumb("BGMI LIVE", "{mode} 🔥", "#f59e0b", "#7c3aed"),
-            announce: true,
-            announce_text: "🔴 BGMI LIVE: {title}\n▶ {youtube}\n🟣 {twitch}".into(),
-            disclaimer: "⚠️ Battlegrounds Mobile India (BGMI) is a trademark of KRAFTON, Inc. \
-                         Gameplay streamed for entertainment under KRAFTON's creator guidelines."
-                .into(),
-            ..Default::default()
-        },
-        Profile {
-            id: "rooms".into(),
-            name: "BGMI custom rooms".into(),
-            kind: "rooms".into(),
-            game: "BGMI".into(),
-            mode: "Open custom rooms".into(),
-            title: "🔴 BGMI CUSTOM ROOM LIVE TAMIL | Everyone Can Join 🎮 | #{n} #bgmicustomroom".into(),
-            description: "🎮 BGMI OPEN CUSTOM ROOMS — play with me! Everyone can join, FREE ENTRY.\n\n\
-                          🗺️ Map / mode: {map}\n\n\
-                          📝 HOW TO JOIN:\n\
-                          1️⃣ Subscribe and stay in the live chat\n\
-                          2️⃣ Room ID & Password are shown on stream when the room opens\n\
-                          3️⃣ Room full? Join the next match\n\n\
-                          📜 ROOM RULES:\n\
-                          ✅ Fair play only\n\
-                          ❌ No hacks, teaming or intentional disconnects\n\
-                          ❌ Don't share the room details outside the stream\n\
-                          ⚖️ Host decision is final"
-                .into(),
-            tags: "bgmi custom room live, bgmi custom room tamil, bgmi room match, bgmi tamil live, \
-                   custom room live, bgmi live tamil, bgmi scrims tamil"
-                .into(),
-            hashtags: "#bgmi #bgmicustomroom #bgmiroommatch #bgmitamil #scrims".into(),
-            banner_label: "CUSTOM ROOMS".into(),
-            twitch: cat("Battlegrounds Mobile India"),
-            twitch_tags: "Tamil, BGMI, CustomRooms, Mobile, English".into(),
-            thumb: thumb("CUSTOM ROOMS", "Everyone can join!", "#22d3ee", "#7c3aed"),
-            announce: true,
-            announce_text: "🎮 BGMI custom rooms LIVE — everyone can join!\n{title}\nRoom details are on the stream ▶ {youtube}".into(),
-            room_on_banner: true,
-            disclaimer: "ℹ️ Free rooms for viewers — not an official KRAFTON event. \
-                         BGMI is a trademark of KRAFTON, Inc."
-                .into(),
-            ..Default::default()
-        },
-        Profile {
-            id: "efootball".into(),
-            name: "eFootball".into(),
-            kind: "phone".into(),
-            game: "eFootball".into(),
-            mode: "Friendlies + Division".into(),
-            title: "🔴 eFOOTBALL LIVE TAMIL ⚽ | {mode} | Day {n} #efootball #efootballtamil".into(),
-            description: "⚽ eFOOTBALL LIVE TAMIL — {mode}!\n\
-                          🎮 Game: eFootball · 🗣️ Language: Tamil + English\n\
-                          🤝 Friendlies with subscribers: type JOIN + your eFootball name in chat\n\
-                          🔥 Squad talk, formations and pack openings — come chat!\n\
-                          👇 Drop a LIKE and SUBSCRIBE if you enjoy the stream!"
-                .into(),
-            tags: "efootball live tamil, efootball tamil, efootball mobile tamil, efootball live, \
-                   efootball friendlies, efootball 2026, efootball division"
-                .into(),
-            hashtags: "#efootball #efootballtamil #efootballmobile #efootball2026".into(),
-            banner_label: "eFootball".into(),
-            twitch: cat("eFootball"),
-            twitch_tags: "Tamil, eFootball, Football, Mobile, English".into(),
-            thumb: thumb("eFOOTBALL", "{mode} ⚽", "#16a34a", "#0ea5e9"),
-            announce: true,
-            announce_text: "⚽ eFootball LIVE: {title}\nFriendlies with subs — type JOIN in chat!\n▶ {youtube}".into(),
-            disclaimer: "⚠️ eFootball™ is a trademark of KONAMI. Friendlies are for fun — \
-                         not an official KONAMI event."
-                .into(),
-            ..Default::default()
-        },
-        pc(
-            "fc26", "EA FC 26", "EA SPORTS FC 26", "Ultimate Team",
-            "🔴 EA FC 26 LIVE TAMIL ⚽ | {mode} | Day {n} #eafc26 #fc26", "⚽",
-            "🏆 Ultimate Team, pack openings and rivals — squad tips in chat!",
-            "ea fc 26 tamil, fc 26 live tamil, fc 26 ultimate team, ea sports fc 26 live, fc 26 pack opening",
-            "#eafc26 #fc26 #fc26tamil #ultimateteam", "EA FC 26", "EA Sports FC 26",
-            "⚠️ EA SPORTS FC™ 26 © Electronic Arts. Streamed for entertainment.",
-            "#22c55e", "#0ea5e9",
-        ),
-        pc(
-            "ets2", "Euro Truck Simulator 2", "Euro Truck Simulator 2", "Chill drive",
-            "🔴 EURO TRUCK SIMULATOR 2 LIVE TAMIL 🚛 | {mode} | Day {n} #ets2", "🚛",
-            "🛣️ Chill late-night driving across Europe — chat and relax with me!",
-            "euro truck simulator 2 tamil, ets2 tamil live, ets2 live, euro truck simulator 2 live, truck simulator tamil",
-            "#ets2 #eurotrucksimulator2 #ets2tamil #trucksimulator", "ETS 2", "Euro Truck Simulator 2",
-            "⚠️ Euro Truck Simulator 2 © SCS Software. Streamed for entertainment.",
-            "#f97316", "#0ea5e9",
-        ),
-        pc(
-            "wd2", "Watch Dogs 2", "Watch Dogs 2", "Story",
-            "🔴 WATCH DOGS 2 LIVE TAMIL 💻 | {mode} | Part {n} #watchdogs2", "💻",
-            "🕹️ Story missions, hacking and free roam in San Francisco.",
-            "watch dogs 2 tamil, watch dogs 2 live tamil, watch dogs 2 gameplay tamil, watch dogs 2 live",
-            "#watchdogs2 #watchdogs #pcgaming", "WATCH DOGS 2", "Watch Dogs 2",
-            "⚠️ Watch Dogs® 2 © Ubisoft. Fictional game — viewer discretion advised.",
-            "#06b6d4", "#a855f7",
-        ),
-        pc(
-            "detroit", "Detroit: Become Human", "Detroit: Become Human", "Full story",
-            "🔴 DETROIT: BECOME HUMAN LIVE TAMIL 🤖 | {mode} | Part {n}", "🤖",
-            "🎬 Every choice changes the story — help me decide in chat!",
-            "detroit become human tamil, detroit become human live tamil, detroit become human gameplay tamil",
-            "#detroitbecomehuman #storygame #pcgaming", "DETROIT", "Detroit: Become Human",
-            "⚠️ Detroit: Become Human © Quantic Dream / Sony Interactive Entertainment. \
-             Mature story — viewer discretion advised.",
-            "#38bdf8", "#1e3a8a",
-        ),
-        pc(
-            "pubgpc", "PUBG PC", "PUBG: BATTLEGROUNDS", "Rank push",
-            "🔴 PUBG PC LIVE TAMIL | {mode} 🔥 | Day {n} #pubg #pubgpc", "🔥",
-            "🎯 Squad fights, chicken dinners and rank push on PC.",
-            "pubg pc live tamil, pubg pc tamil, pubg battlegrounds tamil, pubg live tamil, pubg pc gameplay",
-            "#pubg #pubgpc #pubgtamil #pubgbattlegrounds", "PUBG PC", "PUBG: BATTLEGROUNDS",
-            "⚠️ PUBG: BATTLEGROUNDS © KRAFTON, Inc. Streamed for entertainment.",
-            "#eab308", "#7c3aed",
-        ),
-        Profile {
-            id: "pc".into(),
-            name: "Other PC game".into(),
-            kind: "pc".into(),
-            game: String::new(),
-            mode: "Gameplay".into(),
-            title: "🔴 {game} LIVE TAMIL | {mode} 🔥 | Day {n}".into(),
-            description: "🖥️ {game} LIVE TAMIL — {mode}!\n\
-                          🎮 Game: {game} · 💻 Platform: PC · 🗣️ Language: Tamil + English\n\
-                          👇 Drop a LIKE and SUBSCRIBE if you enjoy the stream!"
-                .into(),
-            tags: "pc gaming tamil, tamil pc gameplay, tamil live gaming".into(),
-            hashtags: "#pcgaming #tamilgaming".into(),
-            banner_label: "{game}".into(),
-            twitch_tags: "Tamil, PC, English".into(),
-            thumb: thumb("{game}", "{mode}", "#ef4444", "#7c3aed"),
-            announce: false,
-            announce_text: "🖥️ {game} LIVE: {title}\n▶ {youtube}".into(),
-            disclaimer: "⚠️ {game} © its publisher. Streamed for entertainment.".into(),
-            ..Default::default()
-        },
-    ]
+    serde_json::from_value(starters_json()["profiles"].clone())
+        .expect("starter profiles match Profile")
 }
 
 fn store_path() -> PathBuf {
@@ -638,7 +421,9 @@ fn variables(
     put(&mut v, "day", &now.format("%A").to_string());
     put(&mut v, "time", &now.format("%-I:%M %p").to_string());
     put(&mut v, "schedule", &d.schedule);
-    put(&mut v, "rules", &d.rules);
+    // The rules may use variables themselves ("Respect {channel}").
+    let rules = fill(&d.rules, &v);
+    put(&mut v, "rules", &rules);
     let yt = if d.youtube_handle.trim().is_empty() {
         String::new()
     } else {
@@ -671,9 +456,10 @@ fn variables(
     put(&mut v, "twitch", &tw);
     put(&mut v, "instagram", &d.instagram);
     put(&mut v, "discord", &d.discord_invite);
-    let hashtags = format!("{} {}", p.hashtags.trim(), d.hashtags.trim())
-        .trim()
-        .to_string();
+    let hashtags = fill(
+        format!("{} {}", p.hashtags.trim(), d.hashtags.trim()).trim(),
+        &v,
+    );
     put(&mut v, "tags", &hashtags);
     for k in ["room", "pass", "map"] {
         v.entry(k.into()).or_default();
@@ -733,14 +519,21 @@ pub fn render(store: &Store, id: &str, extra: &Vars) -> Result<Value, String> {
     let p = store.profile(id).ok_or("Profile not found")?;
     let d = &store.defaults;
     let mut v = variables(d, p, extra, chrono::Local::now());
-    let title = fill(&p.title, &v).trim().to_string();
+    // Title style picked in Go live: 0 normal, 1 hype, 2 special day.
+    let style: usize = extra.get("style").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let template = p
+        .title_options
+        .get(style)
+        .filter(|t| style > 0 && !t.trim().is_empty())
+        .unwrap_or(&p.title);
+    let title = fill(template, &v).trim().to_string();
     v.insert("title".into(), title.clone());
     let description = tidy(&format!(
         "{}\n\n{}",
         fill_lines(&p.description, &v),
         fill_lines(&d.footer, &v)
     ));
-    let yt_tags = youtube_tags(&p.tags, &d.tags);
+    let yt_tags = youtube_tags(&fill(&p.tags, &v), &fill(&d.tags, &v));
     let tw_title: String = title.chars().take(140).collect();
     let mut warnings = Vec::new();
     if title.chars().count() > 100 {
@@ -793,7 +586,7 @@ pub fn render(store: &Store, id: &str, extra: &Vars) -> Result<Value, String> {
             "title": tw_title,
             "category": p.twitch.name,
             "categoryId": p.twitch.id,
-            "tags": twitch_tags(&format!("{},{}", p.twitch_tags, "")),
+            "tags": twitch_tags(&fill(&p.twitch_tags, &v)),
             "language": d.language,
         },
         "discord": { "content": tidy(&fill(&p.announce_text, &v)) },
@@ -1741,7 +1534,7 @@ mod tests {
         let r = render(&store, "bgmi", &Vars::new()).unwrap();
         let d = r["youtube"]["description"].as_str().unwrap();
         assert!(d.contains("▶ YouTube: https://youtube.com/@charlescj2126"));
-        assert!(d.contains("⭐ Join membership: https://youtube.com/@charlescj2126/join"));
+        assert!(d.contains("⭐ Membership: https://youtube.com/@charlescj2126/join"));
         assert!(!d.contains("Instagram:") && !d.contains("Twitch:") && !d.contains("Business:"));
         assert!(
             !d.contains("MY SETUP"),
@@ -1766,23 +1559,61 @@ mod tests {
             p.count = 998;
         }
         for p in starter_profiles() {
-            let extra: Vars = [
-                ("game".to_string(), "Grand Theft Auto V".to_string()),
-                ("room".to_string(), "1".to_string()),
-            ]
-            .into();
-            let t = render(&store, &p.id, &extra).unwrap()["youtube"]["title"]
-                .as_str()
-                .unwrap()
-                .to_string();
-            assert!(
-                t.chars().count() <= 100,
-                "{}: {} chars: {t}",
-                p.id,
-                t.chars().count()
-            );
+            assert_eq!(p.title_options.len(), 3, "{}: three title styles", p.id);
+            for style in 0..3 {
+                let extra: Vars = [
+                    ("game".to_string(), "Grand Theft Auto V".to_string()),
+                    ("room".to_string(), "1".to_string()),
+                    ("style".to_string(), style.to_string()),
+                ]
+                .into();
+                let r = render(&store, &p.id, &extra).unwrap();
+                let t = r["youtube"]["title"].as_str().unwrap().to_string();
+                assert!(
+                    t.chars().count() <= 100,
+                    "{} style {style}: {} chars: {t}",
+                    p.id,
+                    t.chars().count()
+                );
+                assert!(!t.contains('{'), "{} style {style}: {t}", p.id);
+                assert_eq!(
+                    t,
+                    fill(
+                        &p.title_options[style],
+                        &variables(
+                            &store.defaults,
+                            store.profile(&p.id).unwrap(),
+                            &extra,
+                            chrono::Local::now()
+                        )
+                    )
+                    .trim()
+                );
+            }
         }
     }
+
+    #[test]
+    fn pc_tags_get_the_game_name() {
+        let r = render(
+            &Store::default(),
+            "pc",
+            &[("game".to_string(), "Valorant".to_string())].into(),
+        )
+        .unwrap();
+        assert!(r["youtube"]["tags"]
+            .as_str()
+            .unwrap()
+            .starts_with("Valorant live tamil"));
+        assert!(
+            !r["youtube"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("#BGMI"),
+            "no BGMI tags on other games"
+        );
+    }
+
     #[test]
     fn pc_profile_asks_for_game() {
         let r = render(&Store::default(), "pc", &Vars::new()).unwrap();
