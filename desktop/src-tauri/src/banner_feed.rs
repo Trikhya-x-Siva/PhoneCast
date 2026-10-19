@@ -103,7 +103,8 @@ pub fn moments_ready() -> Vec<String> {
     };
     MOMENT_NAMES
         .iter()
-        .filter(|n| moment_path(&dir, n, 0).exists())
+        // All four pieces: the feed needs the one for its loop position.
+        .filter(|n| (0..4).all(|k| moment_path(&dir, n, k * MOMENT_FRAMES).exists()))
         .map(|n| n.to_string())
         .collect()
 }
@@ -141,11 +142,14 @@ pub fn moment_status() -> (Option<String>, Option<String>) {
 /// The pop-up to play now, if any (a click first, else an automatic one).
 fn next_moment(ready: &[String]) -> Option<String> {
     let mut m = MOMENTS.lock().unwrap();
-    if let Some(w) = m.wanted.take() {
+    // A click waits (is not dropped) until its pop-up is ready here.
+    if let Some(w) = m.wanted.clone() {
         if ready.contains(&w) {
+            m.wanted = None;
             m.last = Some(Instant::now());
             return Some(w);
         }
+        return None;
     }
     if !m.auto || m.last.is_some_and(|t| t.elapsed() < m.every) {
         return None;
@@ -245,12 +249,17 @@ pub fn start() -> Option<u16> {
                 // Pop-ups only over the moving banner itself.
                 let is_loop = loop_path().as_ref() == Some(&path);
                 let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
-                let ready = if is_loop { moments_ready() } else { Vec::new() };
+                let mut ready = if is_loop { moments_ready() } else { Vec::new() };
                 // Loop this banner until something changes (switch on its
                 // own frame boundary: the next one starts with a keyframe).
                 loop {
                     let mut i = 0;
                     while i < frames.len() {
+                        if is_loop && i.is_multiple_of(MOMENT_FRAMES) {
+                            // Pop-ups made while live count from the next position
+                            // (a few file checks every 5 s).
+                            ready = moments_ready();
+                        }
                         if !ready.is_empty() && i.is_multiple_of(MOMENT_FRAMES) {
                             if let Some(name) = next_moment(&ready) {
                                 if let Some(m) = read_stream(&moment_path(&dir, &name, i)) {
@@ -272,6 +281,8 @@ pub fn start() -> Option<u16> {
                                     i += m.len();
                                     continue;
                                 }
+                                // Piece unreadable: try again at the next position.
+                                MOMENTS.lock().unwrap().wanted.get_or_insert(name);
                             }
                         }
                         pace.wait();

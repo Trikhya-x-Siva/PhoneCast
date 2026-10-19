@@ -592,10 +592,10 @@ dd { margin: 0; text-align: right; overflow: hidden; text-overflow: ellipsis; wh
 
 /* One-tap game labels. */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
-.chip { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.04); color: inherit; cursor: pointer; }
-.chip:hover { border-color: rgba(255,255,255,.3); }
-.chip.on { background: var(--grad); border-color: transparent; color: #fff; }
-.chip.phone { border-style: dashed; }
+.label-chip { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.04); color: inherit; cursor: pointer; }
+.label-chip:hover { border-color: rgba(255,255,255,.3); }
+.label-chip.on { background: var(--accent); border-color: transparent; color: #fff; }
+.label-chip.phone { border-style: dashed; }
 .end-choices { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .scene-row .scene.busy { opacity: .6; pointer-events: none; }
 

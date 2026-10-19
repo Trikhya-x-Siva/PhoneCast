@@ -307,13 +307,15 @@ class Rig:
             self.recordings.append(r.get("path"))
 
     def popups(self):
-        ready = wait(lambda: self.app.cmd("popups").get("ready"), 400, 2) or []
+        wait(lambda: len(self.app.cmd("popups").get("ready") or []) >= 2, 400, 2)
+        ready = self.app.cmd("popups").get("ready") or []
         self.check("banner pop-ups made", len(ready) >= 2, str(ready))
         for i in range(self.rounds):
             name = ready[i % len(ready)] if ready else "subscribe"
             r = self.app.cmd(f"popup {name}")
             self.check(f"pop-up {name} asked #{i+1}", r.get("ok"), r.get("error", ""))
-            on = wait(lambda: (self.app.status().get("bannerMoment") or {}).get("playing") == name, 7)
+            # Next 5 s position + up to 1 s for the status to show it.
+            on = wait(lambda: (self.app.status().get("bannerMoment") or {}).get("playing") == name, 8)
             self.check(f"pop-up {name} on stream #{i+1}", on)
             off = wait(lambda: not (self.app.status().get("bannerMoment") or {}).get("playing"), 8)
             self.check(f"pop-up {name} done #{i+1}", off)

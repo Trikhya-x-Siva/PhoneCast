@@ -1,0 +1,143 @@
+/* OSSG theme: PhantomBlitz, on the component system's rules.
+ *
+ * - One accent (violet) for primary actions and active states; cyan is a
+ *   secondary data colour only; red means LIVE / on air / danger, nothing else.
+ * - Three faces: display (titles, big numbers), body (UI), mono (anything
+ *   machine-ish: labels, fps, Mbps, timers, status) - UPPERCASE labels with
+ *   wide tracking are the "instrument" look.
+ * - Status is always a word plus a colour, never colour alone.
+ * - Calm motion (150-250 ms), visible focus, reduced motion honoured.
+ *
+ * Fonts are bundled (OFL, from Fontsource): Space Grotesk, Inter, JetBrains Mono.
+ * Loaded after style.css; only overrides what the theme decides.
+ */
+
+@font-face { font-family: "Space Grotesk"; src: url("fonts/space-grotesk.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("fonts/inter.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/jetbrains-mono.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+
+:root {
+  --font-display: "Space Grotesk", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+
+  /* one accent, a text-safe lighter variant on dark, and a tint */
+  --accent: #8b5cf6;
+  --accent-2: #b9a3fd;
+  --accent-tint: rgba(139, 92, 246, 0.14);
+  --accent-ring: rgba(139, 92, 246, 0.45);
+
+  /* semantic status (state only, never decoration) */
+  --success: #34d399; --success-tint: rgba(52, 211, 153, 0.12);
+  --warning: #fbbf24; --warning-tint: rgba(251, 191, 36, 0.12);
+  --danger: #ff4d64;  --danger-tint: rgba(255, 77, 100, 0.14);
+  --info: #67e8f9;    --info-tint: rgba(103, 232, 249, 0.10);
+
+  /* surfaces: canvas < paper (cards) < raised (inputs, tiles) */
+  --canvas: #060812;
+  --paper: rgba(14, 18, 36, 0.86);
+  --raised: rgba(24, 30, 56, 0.72);
+  --ink: #eef1fb;
+  --ink-2: #c3c9e0;
+
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.035) inset, 0 10px 30px rgba(0, 0, 0, 0.32);
+  font-family: var(--font-body);
+}
+
+body { font-family: var(--font-body); font-size: 13.5px; letter-spacing: -0.003em; background: radial-gradient(120% 80% at 50% -10%, #0c1126 0%, var(--canvas) 62%); }
+code, .mono, kbd { font-family: var(--font-mono); }
+
+/* ---------- brand & header ---------- */
+.brand b { font-family: var(--font-display); font-weight: 700; letter-spacing: 0.02em; font-size: 20px; }
+.brand small { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; }
+header { padding: 10px 20px; }
+.pill { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+
+/* ---------- buttons ---------- */
+.btn { font-family: var(--font-body); font-weight: 600; letter-spacing: 0; border-radius: 10px; min-height: 38px; }
+/* primary: solid accent (gradients were everywhere; one accent reads calmer) */
+.btn.live { background: var(--accent); box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2) inset, 0 8px 24px rgba(139, 92, 246, 0.35); }
+.btn.live.on { background: #e5193a; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset, 0 8px 24px rgba(255, 45, 75, 0.38); }
+#liveText { font-variant-numeric: tabular-nums; }
+.ghost { background: var(--raised); }
+@media (hover: hover) and (pointer: fine) {
+  .btn.live:not(.on):not(:disabled):hover { filter: none; background: #9a70f7; }
+  .ghost:not(:disabled):hover { border-color: var(--accent-ring); }
+}
+
+/* ---------- cards & panels ---------- */
+.card, .mixer { background: var(--paper); box-shadow: var(--shadow-card); border-radius: 16px; }
+/* panel eyebrow: mono, uppercase, tracked */
+.card h3, .mixer h3 { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; letter-spacing: 0.14em; color: var(--muted); }
+.card h3::before, .mixer h3::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 8px; border-radius: 2px; background: var(--accent); vertical-align: 1px; }
+
+/* side tabs: segmented, one accent */
+.side-tabs { background: rgba(10, 13, 28, 0.92); border-radius: 12px; }
+.side-tabs button { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+.side-tabs button.on { background: var(--accent); }
+
+/* ---------- labels & inputs ---------- */
+.field > span, .field span:first-child { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.field input[type="text"], .field input:not([type]), .field select, .popup-text, .key-row input {
+  background: var(--raised); border: 1px solid var(--line-strong); border-radius: 10px; font-family: var(--font-body); font-size: 13px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.field input:focus, .field select:focus, .popup-text:focus, .key-row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint); }
+.hint { font-size: 11.5px; color: var(--muted); }
+
+/* ---------- preview (stage) ---------- */
+.screen { border-radius: 16px; }
+.hud .chip, .chip { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; border-radius: 8px; }
+.live-badge, .rec-badge { font-family: var(--font-mono); letter-spacing: 0.12em; border-radius: 8px; }
+.live-badge { background: #e5193a; }
+.scene-cover small { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.2em; }
+.scene-cover b { font-family: var(--font-display); letter-spacing: -0.02em; }
+.program { border-radius: 12px; }
+.program-tag { font-family: var(--font-mono); letter-spacing: 0.12em; }
+
+/* ---------- stat tiles (KPI) ---------- */
+.tile { background: var(--raised); border-radius: 12px; padding: 12px 6px 10px; }
+.tile .big { font-family: var(--font-display); font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.tile .unit { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+dl dt { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+
+/* ---------- scenes ---------- */
+.scene-row .scene { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.005em; border-radius: 12px; }
+.scene-row .scene.on { outline: 2px solid #ff2d4b; box-shadow: 0 6px 22px rgba(255, 45, 75, 0.28); background: transparent; }
+.scene-row .scene.on::after { font-family: var(--font-mono); letter-spacing: 0.12em; }
+.scene-row .scene.auto::before { font-family: var(--font-mono); }
+.scene-row .scene.game { font-family: var(--font-display); }
+
+/* ---------- status: tinted chip + word (never colour alone) ---------- */
+.statusbar { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.03em; background: rgba(8, 10, 22, 0.92); }
+.statusbar .sb { padding: 3px 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.03); }
+.statusbar .sb.good { background: var(--success-tint); }
+.statusbar .sb.warn { background: var(--warning-tint); }
+.statusbar .sb.bad { background: var(--danger-tint); }
+.statusbar .sb.info { background: var(--accent-tint); }
+.alert { font-size: 12.5px; border-radius: 12px; }
+.alert.info { background: var(--accent-tint); border-color: var(--accent-ring); }
+.alert.warn { background: var(--warning-tint); }
+.alert.bad { background: var(--danger-tint); }
+.label-chip { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; border-radius: 8px; }
+.label-chip.on { background: var(--accent); }
+.popups-head b { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; }
+.popups .now { font-family: var(--font-mono); font-size: 11px; }
+.ldest .state, .state { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; }
+.ldest .meta { font-family: var(--font-mono); font-size: 11px; }
+
+/* mixer strips */
+.strip { border-radius: 14px; }
+.names b { font-family: var(--font-display); font-weight: 600; }
+.names small, .vol output { font-family: var(--font-mono); font-size: 10.5px; }
+
+/* sheets (Go live, setup, end) */
+.sheet { border-radius: 20px; }
+.sheet-head h2 { font-family: var(--font-display); font-weight: 700; letter-spacing: -0.02em; }
+
+/* switches: accent when on */
+.switch input:checked + .track { background: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0ms !important; animation-duration: 0ms !important; }
+}

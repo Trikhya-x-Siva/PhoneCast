@@ -539,7 +539,7 @@
     box.innerHTML = "";
     for (const v of list) {
       const b = document.createElement("button");
-      b.className = "chip" + (v === bn.right ? " on" : "") + (v === phoneGame ? " phone" : "");
+      b.className = "label-chip" + (v === bn.right ? " on" : "") + (v === phoneGame ? " phone" : "");
       b.textContent = v === phoneGame ? `On phone: ${v}` : v;
       b.title = v === phoneGame ? "The game open on your phone" : "";
       b.onclick = () => setLabel(v);
