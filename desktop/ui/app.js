@@ -1154,6 +1154,7 @@ async function prepareScene(name) {
   const spec = window.getBannerSpec();
   const design = window.bannerDesignKey();
   if (await invoke("scene_ready", { name, design })) return design;
+  if (window.fontsReady) await window.fontsReady();
   const c = document.createElement("canvas");
   c.width = v.width;
   c.height = v.height;

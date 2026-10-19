@@ -240,7 +240,7 @@
     g.fill();
     g.restore();
     g.fillStyle = "#fff";
-    g.font = `italic 900 ${Math.round(bh * 0.42)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+    g.font = `700 ${Math.round(bh * 0.44)}px "Space Grotesk", "Segoe UI Black", sans-serif`;
     g.fillText("SUBSCRIBE", x + bh * 1.15, y + bh * 0.66);
     g.restore();
   }
@@ -305,54 +305,247 @@
     if (!clip) avatar(g, pad + d / 2, H / 2 + 3, d, s, t);
 
     const x = clip ? Math.round(H * 1.1733) + pad * 0.6 : pad + d + pad * 1.6;
+    // Name: bold display face, a dark shadow so it reads on phones, and a
+    // light sweep across it once every 10 s (not constant motion).
+    const sweep = (curSec % 10) / 1.4;
     shinyText(
       g,
       s.title || "Your channel name",
       x,
-      H * 0.56,
-      `italic 900 ${Math.round(H * 0.36)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`,
-      [[0, "#ffffff"], [0.55, "#e6e9ff"], [1, c2]],
-      c1 + "aa",
-      t,
+      H * 0.53,
+      `700 ${Math.round(H * 0.38)}px ${DISPLAY}`,
+      [[0, "#ffffff"], [0.6, "#eef0ff"], [1, c2]],
+      "rgba(0,0,0,0.75)",
+      sweep <= 1 ? sweep : 2,
       H,
     );
-    g.font = `600 ${Math.round(H * 0.16)}px "Segoe UI", system-ui, sans-serif`;
-    g.fillStyle = "#b8c0dc";
-    g.fillText(s.line || "@yourhandle · Subscribe", x, H * 0.83);
+    // Second line: three short lines in turn, each sliding up into place,
+    // instead of one long sentence.
+    drawRotatingLine(g, x, H * 0.84, H, s, c1, c2);
 
     if (popup > 0) {
       if (!kind || kind === "subscribe") subscribePopup(g, W, H, s, popup);
       else pillPopup(g, W, H, s, popup, MOMENTS[kind](s));
     }
-    if (s.right && !(popup > 0.1 && popup < 0.9)) {
-      g.font = `italic 900 ${Math.round(H * 0.2)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
-      const tw = g.measureText(s.right).width;
-      const ph = H * 0.4, dot = ph * 0.22, pw = tw + ph * 1.2 + dot * 2.2;
-      const px = W - pad * 1.6 - pw, py = H / 2 - ph / 2 + 3, sk = ph * 0.25;
-      const pill = g.createLinearGradient(px, 0, px + pw, 0);
-      pill.addColorStop(0, c1);
-      pill.addColorStop(1, c2);
-      g.save();
-      g.shadowColor = c2;
-      g.shadowBlur = H * 0.08 * (0.6 + 0.4 * Math.sin(t * TAU * 2));
-      g.fillStyle = pill;
-      g.beginPath();
-      g.moveTo(px + sk, py);
-      g.lineTo(px + pw, py);
-      g.lineTo(px + pw - sk, py + ph);
-      g.lineTo(px, py + ph);
-      g.closePath();
-      g.fill();
-      g.restore();
-      // Live dot: blinks twice per loop.
-      const on = 0.35 + 0.65 * (0.5 + 0.5 * Math.cos(t * TAU * 2));
-      g.fillStyle = `rgba(255,59,92,${on})`;
-      g.beginPath();
-      g.arc(px + ph * 0.55, py + ph / 2, dot * (0.85 + 0.15 * on), 0, TAU);
-      g.fill();
-      g.fillStyle = "#ffffff";
-      g.fillText(s.right, px + ph * 0.55 + dot * 2.2, py + ph * 0.7);
+    if (!(popup > 0.1 && popup < 0.9)) {
+      let right = W - pad * 1.6;
+      // "BGMI LIVE" next to the LIVE badge would say LIVE twice.
+      const label = (s.right || "").replace(/\s*\bLIVE\b\s*$/i, "").trim();
+      if (label) {
+        // Game label: clean slanted pill (the LIVE badge has the red dot).
+        g.save();
+        g.font = `700 ${Math.round(H * 0.2)}px ${DISPLAY}`;
+        const tw = g.measureText(label).width;
+        const ph = H * 0.4, pw = tw + ph * 0.9;
+        const px = right - pw, py = H / 2 - ph / 2 + 3, sk = ph * 0.25;
+        const pill = g.createLinearGradient(px, 0, px + pw, 0);
+        pill.addColorStop(0, c1);
+        pill.addColorStop(1, c2);
+        g.shadowColor = c2;
+        g.shadowBlur = H * 0.08 * (0.6 + 0.4 * Math.sin(t * TAU));
+        g.fillStyle = pill;
+        g.beginPath();
+        g.moveTo(px + sk, py);
+        g.lineTo(px + pw, py);
+        g.lineTo(px + pw - sk, py + ph);
+        g.lineTo(px, py + ph);
+        g.closePath();
+        g.fill();
+        g.shadowBlur = 0;
+        g.fillStyle = "#ffffff";
+        g.textBaseline = "middle";
+        g.fillText(label, px + ph * 0.45, py + ph / 2 + 1);
+        g.restore();
+        right = px - H * 0.08;
+      }
+      liveBadge(g, right, H / 2 + 3, H);
     }
+  }
+
+  // ---------- banner text helpers ----------
+  const DISPLAY = `"Space Grotesk", "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+  const BODY = `"Inter", "Segoe UI", system-ui, sans-serif`;
+  // Seconds into the 20 s banner loop (set by bannerAt / momentAt; the
+  // editor preview follows the clock).
+  let curSec = 0;
+
+  /** The handle, the short tagline and the socials from the settings. */
+  function lineParts(s) {
+    const parts = (s.line || "").split("·").map((p) => p.trim()).filter(Boolean);
+    const handle = parts.find((p) => p.startsWith("@")) || (s.title ? "@" + s.title.replace(/\s+/g, "") : "@yourchannel");
+    const tagline = parts.filter((p) => p !== handle && !/subscribe/i.test(p)).join(" · ");
+    return { handle, tagline };
+  }
+
+  function drawRotatingLine(g, x, y, H, s, c1, c2) {
+    const { handle, tagline } = lineParts(s);
+    const lines = [{ kind: "handle", text: handle }, { kind: "subscribe" }];
+    if (tagline) lines.push({ kind: "text", text: tagline });
+    const period = 20 / lines.length;
+    const i = Math.floor(curSec / period) % lines.length;
+    const local = curSec - Math.floor(curSec / period) * period;
+    const ease = (v) => 1 - Math.pow(1 - Math.min(1, Math.max(0, v)), 3);
+    const inK = ease(local / 0.45);
+    const outK = local > period - 0.35 ? ease((local - (period - 0.35)) / 0.35) : 0;
+    const size = Math.round(H * 0.17);
+    g.save();
+    // clip to the line's band so the slide never overlaps the name
+    g.beginPath();
+    g.rect(x - 4, y - size * 1.25, H * 9, size * 1.6);
+    g.clip();
+    g.globalAlpha = inK * (1 - outK);
+    g.translate(0, (1 - inK) * size * 0.9 - outK * size * 0.9);
+    g.textBaseline = "alphabetic";
+    g.shadowColor = "rgba(0,0,0,0.8)";
+    g.shadowBlur = H * 0.04;
+    const L = lines[i];
+    if (L.kind === "handle") {
+      g.font = `600 ${size}px ${BODY}`;
+      g.fillStyle = "#eef1ff";
+      g.fillText(L.text, x, y);
+      let ix = x + g.measureText(L.text).width + size * 0.6;
+      const ic = size * 1.05;
+      g.shadowBlur = 0;
+      ytIcon(g, ix, y - ic * 0.82, ic);
+      ix += ic * 1.55;
+      if (s.social) {
+        igIcon(g, ix, y - ic * 0.86, ic);
+        ix += ic * 1.3;
+      }
+      if (s.discord) dcIcon(g, ix, y - ic * 0.86, ic);
+    } else if (L.kind === "subscribe") {
+      // Bell right next to "Subscribe" (rings as the line comes in), then Like.
+      const ring = Math.sin(local * TAU * 2.5) * 0.45 * Math.exp(-local * 0.9);
+      const r = size * 0.42;
+      bell(g, x + r, y - size * 0.4, r, ring, "#ff3b5c");
+      g.font = `700 ${size}px ${BODY}`;
+      g.fillStyle = "#ffffff";
+      const sx = x + r * 2 + size * 0.35;
+      g.fillText("Subscribe", sx, y);
+      let lx = sx + g.measureText("Subscribe").width + size * 0.9;
+      g.font = `${Math.round(size * 0.95)}px "Segoe UI Emoji", sans-serif`;
+      const pop = 1 + 0.18 * Math.max(0, Math.sin((local - 0.6) * TAU * 1.2)) * Math.exp(-Math.max(0, local - 0.6));
+      g.save();
+      g.translate(lx + size * 0.45, y - size * 0.35);
+      g.scale(pop, pop);
+      g.fillText("👍", -size * 0.45, size * 0.35);
+      g.restore();
+      lx += size * 1.25;
+      g.font = `700 ${size}px ${BODY}`;
+      g.fillStyle = "#ffffff";
+      g.fillText("Like", lx, y);
+    } else {
+      g.font = `600 ${size}px ${BODY}`;
+      g.fillStyle = "#d6dbf2";
+      g.fillText(L.text, x, y);
+    }
+    g.restore();
+  }
+
+  // A bell (white or coloured), centre (cx, cy), radius r, swinging by `swing`.
+  function bell(g, cx, cy, r, swing, color) {
+    g.save();
+    g.translate(cx, cy - r * 0.9);
+    g.rotate(swing);
+    g.fillStyle = color;
+    g.beginPath();
+    g.moveTo(-r, r * 1.3);
+    g.quadraticCurveTo(-r, -r * 0.2, 0, -r * 0.35);
+    g.quadraticCurveTo(r, -r * 0.2, r, r * 1.3);
+    g.closePath();
+    g.fill();
+    g.beginPath();
+    g.arc(0, r * 1.55, r * 0.28, 0, TAU);
+    g.fill();
+    g.restore();
+  }
+
+  function ytIcon(g, x, y, h) {
+    const w = h * 1.4;
+    g.save();
+    g.fillStyle = "#ff0033";
+    g.beginPath();
+    g.roundRect(x, y, w, h, h * 0.26);
+    g.fill();
+    g.fillStyle = "#fff";
+    g.beginPath();
+    g.moveTo(x + w * 0.4, y + h * 0.28);
+    g.lineTo(x + w * 0.4, y + h * 0.72);
+    g.lineTo(x + w * 0.68, y + h * 0.5);
+    g.closePath();
+    g.fill();
+    g.restore();
+  }
+
+  function igIcon(g, x, y, h) {
+    g.save();
+    const gr = g.createLinearGradient(x, y + h, x + h, y);
+    gr.addColorStop(0, "#feda75");
+    gr.addColorStop(0.35, "#fa7e1e");
+    gr.addColorStop(0.65, "#d62976");
+    gr.addColorStop(1, "#4f5bd5");
+    g.fillStyle = gr;
+    g.beginPath();
+    g.roundRect(x, y, h, h, h * 0.28);
+    g.fill();
+    g.strokeStyle = "#fff";
+    g.lineWidth = h * 0.09;
+    g.beginPath();
+    g.roundRect(x + h * 0.2, y + h * 0.2, h * 0.6, h * 0.6, h * 0.18);
+    g.stroke();
+    g.beginPath();
+    g.arc(x + h * 0.5, y + h * 0.5, h * 0.15, 0, TAU);
+    g.stroke();
+    g.fillStyle = "#fff";
+    g.beginPath();
+    g.arc(x + h * 0.7, y + h * 0.3, h * 0.05, 0, TAU);
+    g.fill();
+    g.restore();
+  }
+
+  function dcIcon(g, x, y, h) {
+    g.save();
+    g.fillStyle = "#5865f2";
+    g.beginPath();
+    g.roundRect(x, y, h, h, h * 0.28);
+    g.fill();
+    // simplified controller-face: white rounded body, two blurple eyes
+    g.fillStyle = "#fff";
+    g.beginPath();
+    g.roundRect(x + h * 0.18, y + h * 0.3, h * 0.64, h * 0.42, h * 0.18);
+    g.fill();
+    g.fillStyle = "#5865f2";
+    g.beginPath();
+    g.arc(x + h * 0.38, y + h * 0.5, h * 0.07, 0, TAU);
+    g.arc(x + h * 0.62, y + h * 0.5, h * 0.07, 0, TAU);
+    g.fill();
+    g.restore();
+  }
+
+  // Pulsing red LIVE badge, its right edge at `right`.
+  function liveBadge(g, right, cy, H) {
+    g.save();
+    const size = Math.round(H * 0.15);
+    g.font = `700 ${size}px ${DISPLAY}`;
+    const tw = g.measureText("LIVE").width;
+    const bh = H * 0.3, bw = tw + bh * 1.05;
+    const bx = right - bw, by = cy - bh / 2;
+    const pulse = 0.5 + 0.5 * Math.cos((curSec % 1.6) / 1.6 * TAU);
+    g.shadowColor = "rgba(255,45,75,0.7)";
+    g.shadowBlur = H * 0.06 * (0.6 + 0.4 * pulse);
+    g.fillStyle = "#e5193a";
+    g.beginPath();
+    g.roundRect(bx, by, bw, bh, bh * 0.22);
+    g.fill();
+    g.shadowBlur = 0;
+    g.fillStyle = `rgba(255,255,255,${0.55 + 0.45 * pulse})`;
+    g.beginPath();
+    g.arc(bx + bh * 0.42, cy, bh * 0.13 * (0.85 + 0.15 * pulse), 0, TAU);
+    g.fill();
+    g.fillStyle = "#fff";
+    g.textBaseline = "middle";
+    g.fillText("LIVE", bx + bh * 0.72, cy + 1);
+    g.restore();
   }
 
   function drawClean(g, W, H, s) {
@@ -472,7 +665,7 @@
     const tx = clip ? W * 0.53 : W * 0.27 + d * 0.75;
     const titleSize = Math.round(Math.min(H * 0.13, (W - tx - W * 0.05) / (sc.title.length * 0.62)));
     shinyText(g, sc.title, tx, H * 0.47,
-      `italic 900 ${titleSize}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`,
+      `700 ${titleSize}px "Space Grotesk", "Segoe UI Black", sans-serif`,
       [[0, "#ffffff"], [0.5, "#e8eaff"], [1, c2]], c1 + "cc", t, H);
     g.fillStyle = "#c3c9e4";
     const small = Math.max(titleSize * 0.32, H * 0.034);
@@ -481,7 +674,7 @@
     // Channel line.
     g.fillStyle = "#ffffff";
     const chY = H * 0.47 + titleSize * 0.3 + small * 2.9;
-    g.font = `italic 900 ${Math.round(small * 1.15)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+    g.font = `700 ${Math.round(small * 1.15)}px "Space Grotesk", "Segoe UI Black", sans-serif`;
     const ch = s.title || "Your channel";
     g.fillText(ch, tx, chY);
     const cw = g.measureText(ch + "  ").width;
@@ -607,7 +800,7 @@
       g.translate(W * 0.68 + shake, H * 0.5);
       g.scale(sc, sc);
       g.globalAlpha = Math.min(1, k * 1.5);
-      g.font = `italic 900 ${size}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+      g.font = `700 ${size}px "Space Grotesk", "Segoe UI Black", sans-serif`;
       g.textAlign = "center";
       const grad = g.createLinearGradient(-W * 0.25, 0, W * 0.25, 0);
       grad.addColorStop(0, "#ffffff");
@@ -651,7 +844,7 @@
       grad.addColorStop(1, c2);
       g.fillStyle = grad;
       g.fillRect(0, 0, W, H);
-      g.font = `italic 900 ${Math.round(H * 0.09)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+      g.font = `700 ${Math.round(H * 0.09)}px "Space Grotesk", "Segoe UI Black", sans-serif`;
       g.textAlign = "center";
       g.fillStyle = "rgba(255,255,255,0.92)";
       g.fillText(s.title || "", W / 2, H * 0.53);
@@ -672,6 +865,7 @@
   const POPUP_FROM = 16;
   /** Banner frame at second `sec` of the 20 s loop. */
   function bannerAt(g, W, H, s, sec) {
+    curSec = sec % BANNER_LOOP_SECONDS;
     const t = (sec % LOOP_SECONDS) / LOOP_SECONDS;
     // With app pop-ups on, the loop itself stays clean (they are laid in).
     const p = s.popups && s.popups.on ? 0 : sec >= POPUP_FROM ? (sec - POPUP_FROM) / (BANNER_LOOP_SECONDS - POPUP_FROM) : 0;
@@ -694,6 +888,7 @@
   }
   /** Banner frame `sec` of the loop with pop-up `name` at `k` (0..1) of its 5 s. */
   function momentAt(g, W, H, s, name, sec, k) {
+    curSec = sec % BANNER_LOOP_SECONDS;
     const t = (sec % LOOP_SECONDS) / LOOP_SECONDS;
     draw(g, W, H, s, t, Math.max(0.0001, k), name);
   }
@@ -705,7 +900,7 @@
     const pad = Math.round(H * 0.12);
     const bh = H * 0.5;
     g.save();
-    g.font = `italic 900 ${Math.round(bh * 0.4)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+    g.font = `700 ${Math.round(bh * 0.4)}px "Space Grotesk", "Segoe UI Black", sans-serif`;
     const tw = Math.min(g.measureText(m.text).width, W * 0.42);
     const bw = tw + bh * 1.6;
     const x = W - pad * 1.6 - bw + (1 - k) * (bw + pad * 2), y = H / 2 - bh / 2 + 3;
@@ -723,7 +918,7 @@
     g.textBaseline = "middle";
     g.fillText(m.icon, x + bh * 0.3, y + bh / 2 - bounce);
     g.fillStyle = "#fff";
-    g.font = `italic 900 ${Math.round(bh * 0.4)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+    g.font = `700 ${Math.round(bh * 0.4)}px "Space Grotesk", "Segoe UI Black", sans-serif`;
     g.fillText(m.text, x + bh * 1.15, y + bh / 2 + 1, tw);
     g.restore();
   }

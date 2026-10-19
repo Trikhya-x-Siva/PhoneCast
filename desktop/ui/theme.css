@@ -71,7 +71,10 @@ header { padding: 10px 20px; }
 .card h3, .mixer h3 { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; letter-spacing: 0.14em; color: var(--muted); }
 .card h3::before, .mixer h3::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 8px; border-radius: 2px; background: var(--accent); vertical-align: 1px; }
 
-/* side tabs: segmented, one accent */
+/* side tabs: segmented, one accent; stuck to the very top of the panel so
+   cards scroll under it, not into a gap above it */
+aside { padding-top: 0; }
+.side-tabs { margin-top: var(--s-4); top: 0; box-shadow: 0 -16px 0 0 #070a16, 0 6px 18px rgba(0, 0, 0, 0.35); }
 .side-tabs { background: rgba(10, 13, 28, 0.92); border-radius: 12px; }
 .side-tabs button { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
 .side-tabs button.on { background: var(--accent); }

@@ -1020,11 +1020,15 @@ impl Core {
                             ),
                         );
                     }
-                    if v.get("thermal").and_then(Value::as_u64).unwrap_or(0) >= 2 {
-                        diag::log(
-                            "phone",
-                            format!("phone is hot: thermal level {}", v["thermal"]),
-                        );
+                    // Logged when the heat level changes, not every second.
+                    let hot = v.get("thermal").and_then(Value::as_u64).unwrap_or(0);
+                    let was = i
+                        .phone_stats
+                        .get("thermal")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    if hot != was && (hot >= 2 || was >= 2) {
+                        diag::log("phone", format!("phone heat level {was} -> {hot}"));
                     }
                     i.phone_stats = v;
                 }

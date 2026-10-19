@@ -321,7 +321,8 @@
   window.bannerDesignKey = () => {
     const v = bn.assetVer || {};
     const sig = (k) => (bn[k] ? "v" + (v[k] || 0) : "");
-    const str = JSON.stringify([bn.style, bn.title, bn.line, bn.right, bn.color, bn.color2, sig("logo"), sig("image"), sig("sceneBg"), sig("stripBg"), sig("poseWave"), sig("poseShush"), bn.social, bn.discord, bn.custom, bn.popups]);
+    // "look2": the banner's text design changed (remake saved banners).
+    const str = JSON.stringify(["look2", bn.style, bn.title, bn.line, bn.right, bn.color, bn.color2, sig("logo"), sig("image"), sig("sceneBg"), sig("stripBg"), sig("poseWave"), sig("poseShush"), bn.social, bn.discord, bn.custom, bn.popups]);
     let h = 2166136261;
     for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
     return (h >>> 0).toString(36);
@@ -341,7 +342,16 @@
   }
   const ASSETS = ["logo", "image", "sceneBg", "stripBg", "poseWave", "poseShush"];
   let savedKey = null;
+  // Canvas text uses the bundled fonts: wait for them, or the first frames
+  // come out in a fallback font.
+  window.fontsReady = () =>
+    Promise.all([
+      document.fonts.load('700 40px "Space Grotesk"'),
+      document.fonts.load('600 20px "Inter"'),
+      document.fonts.load('700 20px "Inter"'),
+    ]).catch(() => {});
   async function saveBannerNow() {
+    await window.fontsReady();
     const H = stripHeight();
     const clip = (bn._clips || []).includes("gaming");
     const key = window.bannerDesignKey() + "@" + H + (clip ? "+clip" : "");

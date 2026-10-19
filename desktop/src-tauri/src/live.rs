@@ -1751,14 +1751,20 @@ pub(crate) fn video_filter(
     // Blurred, slightly darkened and more saturated so the real picture stands out.
     let soften = "boxblur=luma_radius=12:luma_power=2:chroma_radius=6:chroma_power=2,eq=brightness=-0.06:saturation=1.15";
     if nvidia {
+        // The phone picture is decoded on the GPU but handed over through
+        // system memory and uploaded again: kept on the GPU, a scene switch
+        // (the phone's H.264 setup differs from the scene's) made the decoder
+        // rebuild its frame buffers, and NVENC then failed ("Could not
+        // register an input HW frame") and the stream dropped. Seen with the
+        // real phone at 1440p; reproduced with its recorded stream.
         let fit = format!(
             "scale_cuda=w={w}:h={h}:force_original_aspect_ratio=decrease:force_divisible_by=2:interp_algo=lanczos:format=nv12"
         );
         match framing {
             Framing::Blur => (
-                &["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+                &["-hwaccel", "cuda"],
                 format!(
-                    "[0:v:0]split=2[a][b];[a]{fit}[fg];\
+                    "[0:v:0]format=nv12,hwupload_cuda,split=2[a][b];[a]{fit}[fg];\
                      [b]scale_cuda=w=384:h=216:force_original_aspect_ratio=increase:force_divisible_by=2:format=nv12,\
                      hwdownload,format=nv12,format=yuv420p,crop=384:216,{soften},\
                      scale={w}:{h}:flags=fast_bilinear,format=nv12,hwupload_cuda[bg];\
@@ -1767,8 +1773,8 @@ pub(crate) fn video_filter(
                 ),
             ),
             Framing::Fit | Framing::Phone => (
-                &["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
-                format!("[0:v:0]{fit},pad_cuda={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=60,setsar=1[v]"),
+                &["-hwaccel", "cuda"],
+                format!("[0:v:0]format=nv12,hwupload_cuda,{fit},pad_cuda={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=60,setsar=1[v]"),
             ),
             Framing::Fill => (
                 &["-hwaccel", "cuda"],
@@ -1778,9 +1784,9 @@ pub(crate) fn video_filter(
             // clean base layer), the game on top across the middle, then the
             // banner (input 1) right under the game.
             Framing::Vertical(gh) => (
-                &["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+                &["-hwaccel", "cuda"],
                 format!(
-                    "[0:v:0]split=2[a][b];\
+                    "[0:v:0]format=nv12,hwupload_cuda,split=2[a][b];\
                      [a]scale_cuda=w={w}:h={gh}:interp_algo=lanczos:format=nv12[fg];\
                      [b]scale_cuda=w=216:h=384:force_original_aspect_ratio=increase:force_divisible_by=2:format=nv12,\
                      hwdownload,format=nv12,format=yuv420p,crop=216:384,{soften},\
@@ -1797,9 +1803,9 @@ pub(crate) fn video_filter(
             // layer, uploaded from the CPU: with a GPU-padded game as the base,
             // overlay_cuda left a green bottom row at 720p/1080p.
             Framing::Banner(gh) => (
-                &["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+                &["-hwaccel", "cuda"],
                 format!(
-                    "[0:v:0]scale_cuda=w={w}:h={gh}:interp_algo=lanczos:format=nv12[g];[1:v]scale={w}:{st}:flags=lanczos,pad={w}:{h}:0:{gh}:black,fps=60,format=nv12,hwupload_cuda[bg];[bg][g]overlay_cuda=x=0:y=0:shortest=1,scale_cuda=format=yuv420p,fps=60,setsar=1[v]",
+                    "[0:v:0]format=nv12,hwupload_cuda,scale_cuda=w={w}:h={gh}:interp_algo=lanczos:format=nv12[g];[1:v]scale={w}:{st}:flags=lanczos,pad={w}:{h}:0:{gh}:black,fps=60,format=nv12,hwupload_cuda[bg];[bg][g]overlay_cuda=x=0:y=0:shortest=1,scale_cuda=format=yuv420p,fps=60,setsar=1[v]",
                     st = h - gh
                 ),
             ),
@@ -1864,6 +1870,16 @@ fn friendly_error(line: &str) -> String {
         "The platform rejected the stream key — copy it again".into()
     } else if l.contains("no such host") || l.contains("failed to resolve") {
         "No internet connection".into()
+    } else if l.contains("register an input")
+        || l.contains("error encoding")
+        || l.contains("error submitting")
+        || l.contains("nvenc")
+        || l.contains("cuda")
+    {
+        "The video encoder hiccuped — restarting it (a few seconds)".into()
+    } else if l.contains("return code") || l.contains("terminating thread") {
+        // Internal FFmpeg wording with an error number: never show the code.
+        "The stream stopped for a moment — restarting it by itself".into()
     } else {
         line.chars().take(160).collect()
     }
@@ -2616,6 +2632,92 @@ mod tests {
     /// pixels and clean edges for every framing (overlay_cuda used to pad
     /// 1080 → 1088, pad_cuda kept a 99:80 pixel shape, and scale_cuda left
     /// green bottom rows).
+    /// Every GPU framing through a phone -> scene -> phone stream (the real
+    /// phone's H.264 setup differs from the scene's; the switch used to
+    /// crash NVENC): `PHONECAST_SWITCH=<combo.h264> cargo test
+    /// scene_switch_all_framings -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn scene_switch_all_framings() {
+        let ffmpeg = find_ffmpeg().expect("ffmpeg");
+        let Ok(sample) = std::env::var("PHONECAST_SWITCH") else {
+            return;
+        };
+        let out = std::env::temp_dir().join("phonecast_switch.mkv");
+        for (w, h) in [(1920, 1080), (2560, 1440)] {
+            let banner = Framing::Banner(banner_game_height(w, 2376, 1080).unwrap());
+            let vertical = Framing::Vertical(vertical_game_height(h, 2376, 1080));
+            for framing in [
+                Framing::Blur,
+                Framing::Fit,
+                Framing::Phone,
+                banner,
+                vertical,
+            ] {
+                let (w, h) = match framing {
+                    Framing::Phone => phone_shape(h, 2376, 1080),
+                    Framing::Vertical(_) => (h, w),
+                    _ => (w, h),
+                };
+                let (hw, filter) = video_filter(true, framing, w, h);
+                let extra = if matches!(framing, Framing::Banner(_) | Framing::Vertical(_)) {
+                    vec![
+                        "-f".to_string(),
+                        "lavfi".into(),
+                        "-i".into(),
+                        format!("color=c=0x101828:s={w}x200:r=30"),
+                    ]
+                } else {
+                    Vec::new()
+                };
+                let o = Command::new(&ffmpeg)
+                    .args(["-hide_banner", "-loglevel", "error", "-y"])
+                    .args(hw)
+                    .args([
+                        "-reinit_filter",
+                        "0",
+                        "-f",
+                        "h264",
+                        "-framerate",
+                        "60",
+                        "-i",
+                        &sample,
+                    ])
+                    .args(&extra)
+                    .args([
+                        "-filter_complex",
+                        &filter,
+                        "-map",
+                        "[v]",
+                        "-c:v",
+                        "hevc_nvenc",
+                        "-b:v",
+                        "14M",
+                    ])
+                    .args(["-f", "matroska"])
+                    .arg(&out)
+                    .output()
+                    .unwrap();
+                let err = String::from_utf8_lossy(&o.stderr).to_string();
+                let n = Command::new(ffmpeg.with_file_name("ffprobe.exe"))
+                    .args(["-v", "error", "-count_frames", "-select_streams", "v"])
+                    .args(["-show_entries", "stream=nb_read_frames", "-of", "csv=p=0"])
+                    .arg(&out)
+                    .output()
+                    .unwrap();
+                let frames = String::from_utf8_lossy(&n.stdout).trim().to_string();
+                println!(
+                    "{framing:?} {w}x{h}: {frames} frames {}",
+                    err.lines().next().unwrap_or("")
+                );
+                assert!(
+                    o.status.success() && !err.contains("register"),
+                    "{framing:?} {w}x{h}: {err}"
+                );
+            }
+        }
+    }
+
     /// `PHONECAST_SAMPLE=<file.h264> cargo test gpu_framing_sizes -- --ignored --nocapture`
     #[test]
     #[ignore]
