@@ -383,7 +383,9 @@ def main():
     for p in rig.recordings:
         if p and os.path.exists(p):
             a = analyze(probe, p)
-            warn = subprocess.run([ffmpeg, "-v", "warning", "-i", p, "-f", "null", "-"],
+            # -c copy: the file's own timestamps (decoding re-times frames and
+            # made up duplicates of its own).
+            warn = subprocess.run([ffmpeg, "-v", "warning", "-i", p, "-c", "copy", "-f", "null", "-"],
                                   capture_output=True, text=True).stderr
             a["timestamp_warnings"] = sum(1 for l in warn.splitlines() if "monoton" in l or "Invalid" in l)
             recs.append(a)
@@ -394,6 +396,25 @@ def main():
             low = line.lower()
             if any(k in low for k in ["error", "panic", "stream ended", "reconnect attempt", "not ready", "had to be cut off", "impossible"]):
                 errors.append(line.strip()[:240])
+    # The stream itself must be perfect, not only the switches: these count
+    # as failures like any check.
+    for sg in segs:
+        name = f"stream {sg.get('path')}"
+        if sg.get("error"):
+            rig.check(f"{name} readable", False, sg["error"])
+            continue
+        rig.check(f"{name}: no video gaps", not sg["video_gaps"], str(sg["video_gaps"][:5]))
+        rig.check(f"{name}: no audio gaps", not sg["audio_gaps"], str(sg["audio_gaps"][:5]))
+        rig.check(f"{name}: timestamps forward", sg["backwards_dts"] == 0, str(sg["backwards_dts"]))
+        if sg["seconds"] >= 5:
+            rig.check(f"{name}: 60 fps", sg["fps"] >= 59.5, str(sg["fps"]))
+            rig.check(f"{name}: keyframes <= 2 s", (sg["max_keyframe_interval"] or 0) <= 2.05, str(sg["max_keyframe_interval"]))
+    for r in recs:
+        name = f"recording {r.get('path')}"
+        rig.check(f"{name}: no video gaps", not r["video_gaps"], str(r["video_gaps"][:5]))
+        rig.check(f"{name}: no audio gaps", not r["audio_gaps"], str(r["audio_gaps"][:5]))
+        rig.check(f"{name}: timestamps forward", r["backwards_dts"] == 0 and r["timestamp_warnings"] == 0,
+                  f'{r["backwards_dts"]} backwards, {r["timestamp_warnings"]} warnings')
     fails = [e for e in rig.events if not e["ok"]]
     report = {
         "seconds": round(time.time() - started),

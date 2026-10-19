@@ -168,6 +168,7 @@ class FakePhone:
     def _video(self):
         period = 1 / 60
         t0 = time.monotonic()
+        t0_us = now_us()
         n = 0
         shape = None
         i = 0
@@ -183,7 +184,7 @@ class FakePhone:
             if not self.hold and not (wait_key and not key):
                 wait_key = False
                 try:
-                    self.send(VIDEO_FRAME, data, flags=1 if key else 0)
+                    self.send(VIDEO_FRAME, data, flags=1 if key else 0, pts=t0_us + int(n * 1_000_000 / 60))
                     self.sent_frames += 1
                 except OSError:
                     break
@@ -198,6 +199,7 @@ class FakePhone:
         import math
         chunk = 480  # 10 ms
         t0 = time.monotonic()
+        t0_us = now_us()
         n = 0
         ph = 0.0
         while self.running:
@@ -207,7 +209,7 @@ class FakePhone:
                 ph += 2 * math.pi * 440 / 48000
                 buf += struct.pack("<hh", v, v)
             try:
-                self.send(AUDIO_PCM, bytes(buf))
+                self.send(AUDIO_PCM, bytes(buf), pts=t0_us + n * 10_000)
             except OSError:
                 break
             n += 1

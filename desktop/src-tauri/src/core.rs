@@ -139,6 +139,8 @@ pub struct Core {
     device_warnings: Mutex<Vec<String>>,
     /// End timestamp of the last audio chunk sent out (see `audio_in_order`).
     audio_end: Mutex<Option<i64>>,
+    /// Timestamp of the last video frame sent out (kept moving forward).
+    video_end: Mutex<Option<i64>>,
     /// Scene shown instead of the phone picture (see `scenes`).
     scene: Mutex<crate::scenes::SceneState>,
     /// Prepared scenes by key (scene name + design + phone size + codec).
@@ -200,6 +202,7 @@ impl Core {
             hotkeys: Mutex::new(None),
             device_warnings: Mutex::new(Vec::new()),
             audio_end: Mutex::new(None),
+            video_end: Mutex::new(None),
             scene: Mutex::new(Default::default()),
             scene_cache: Mutex::new(Default::default()),
             scene_cfgs: Mutex::new(Default::default()),
@@ -612,7 +615,7 @@ impl Core {
                     .last_phone_frame
                     .lock()
                     .unwrap()
-                    .is_none_or(|t| t.elapsed() > Duration::from_millis(300));
+                    .is_none_or(|t| t.elapsed() > Duration::from_millis(150));
                 // No other lock may be taken while `scene` is held (the status
                 // thread holds `inner` and then reads the scene: deadlock).
                 let pc = self.is_pc_mode();
@@ -821,6 +824,8 @@ impl Core {
                 i.mbps = 0.0;
             }
             self.mixer.game_audio_gone();
+            // The scene clock takes over at once (no 150 ms hole in the video).
+            *self.last_phone_frame.lock().unwrap() = None;
             // Live: keep the broadcast going on Be right back (the scene clock
             // sends it) until the phone and the game are back.
             self.auto_cover("the phone disconnected");
@@ -1041,7 +1046,40 @@ impl Core {
 
     /// Hands media to the recorder and live streams (never blocks).
     fn dispatch(&self, m: Media) {
+        // Video only moves forward: phone frames (stamped at capture) and the
+        // scene's own clock (stamped now) can cross by a few ms at a switch;
+        // the live encoder re-times them, but recordings got backwards
+        // timestamps (players skip or stutter there).
+        let m = match m {
+            Media::Video { pts, key, data } => {
+                let mut last = self.video_end.lock().unwrap();
+                // At least 2 ms apart: recordings count in whole ms, and two
+                // frames in the same ms were "non monotonic" there.
+                let pts = match *last {
+                    Some(l) if pts < l + 2_000 && l - pts < 2_000_000 => l + 2_000,
+                    _ => pts,
+                };
+                *last = Some(pts);
+                Media::Video { pts, key, data }
+            }
+            other => other,
+        };
         if let Media::Audio { pts, pcm } = &m {
+            // A short hole (switching between phone sound and the PC's own
+            // clock) is filled with silence: players stall or click on gaps.
+            let hole = self
+                .audio_end
+                .lock()
+                .unwrap()
+                .map(|e| (e, *pts - e))
+                .filter(|(_, gap)| (15_000..2_000_000).contains(gap));
+            if let Some((from, gap)) = hole {
+                let frames = (gap * 48_000 / 1_000_000) as usize;
+                self.dispatch(Media::Audio {
+                    pts: from,
+                    pcm: Arc::new(vec![0u8; frames * 4]),
+                });
+            }
             let mut end = self.audio_end.lock().unwrap();
             if !audio_in_order(&mut end, *pts, pcm.len()) {
                 return;
