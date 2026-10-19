@@ -262,6 +262,19 @@ const YOUTUBE: &[Preset] = &[
         None,
         AAC_YT,
     ),
+    // Pure mode: HEVC at the same 8 Mbps is clearly sharper than H.264
+    // (YouTube re-encodes for viewers, so the ingest codec never reaches
+    // them).
+    p(
+        "yt-1080p60-hevc-8m",
+        "1080p60 HEVC · 8 Mbps (steady, sharp)",
+        Codec::Hevc,
+        P1080,
+        8_000,
+        "main",
+        None,
+        AAC_YT,
+    ),
     p(
         "yt-1080p60-hevc",
         "1080p60 HEVC · 12 Mbps (slower upload)",
@@ -1194,7 +1207,10 @@ mod tests {
     fn youtube_presets_never_trigger_lower_than_recommended() {
         // "-lite" and the steady 8 Mbps one sit below the recommendation on
         // purpose (above YouTube's minimum): they exist for modest uploads.
-        for pr in YOUTUBE.iter().filter(|p| !p.id.ends_with("-lite") && !p.id.ends_with("-8m")) {
+        for pr in YOUTUBE
+            .iter()
+            .filter(|p| !p.id.ends_with("-lite") && !p.id.ends_with("-8m"))
+        {
             let (min, rec) = youtube_range(pr.codec, pr.h, pr.fps).unwrap();
             assert!(pr.kbps >= rec, "{} is below YouTube's recommended", pr.id);
             assert!(pr.kbps >= min);

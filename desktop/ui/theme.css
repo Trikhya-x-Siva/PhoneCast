@@ -152,3 +152,7 @@ body.pure .side-tabs { display: none; }
 body.pure aside > .card[data-tab] { display: block; }
 body.pure aside > .card.hidden { display: none !important; }
 .pure-line { margin: 0 0 10px; font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }
+
+/* Pure mode: no mixer (game + mic at their levels, noise suppression on)
+   and no picture/banner choices in Go live (black bars, nothing added). */
+body.pure .mixer, body.pure #liveModal .framing, body.pure #bannerEditor { display: none !important; }

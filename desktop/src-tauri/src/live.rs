@@ -752,7 +752,12 @@ impl Live {
         if pc.is_none() {
             for i in &mut inputs {
                 i.preset = if pure() && i.platform == Platform::Youtube {
-                    "yt-1080p60-h264-8m".into()
+                    if enc.hevc_hw() {
+                        "yt-1080p60-hevc-8m"
+                    } else {
+                        "yt-1080p60-h264-8m"
+                    }
+                    .into()
                 } else {
                     presets::at_most_1080(i.platform, &i.preset).into()
                 };
@@ -1861,6 +1866,8 @@ pub(crate) fn video_filter(
             ),
             Framing::Fit | Framing::Phone => (
                 &["-hwaccel", "cuda"],
+                // No CPU sharpening: measured 1.3 cores (cas) / 0.3 (unsharp)
+                // at 1080p60; sharpness comes from the encoder settings.
                 format!("[0:v:0]format=nv12,hwupload_cuda,{fit},pad_cuda={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps=60,setsar=1[v]"),
             ),
             Framing::Fill => (

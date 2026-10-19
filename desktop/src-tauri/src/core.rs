@@ -1331,7 +1331,19 @@ impl Core {
         }
         diag::log("live", "applying new settings while live");
         self.live.stop_for_switch();
-        self.start_live()
+        match self.start_live() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Never leave the stream off because a lower setting didn't
+                // fit: go back to what was running.
+                diag::log(
+                    "live",
+                    format!("new settings refused ({e}); keeping the stream on as before"),
+                );
+                self.live.reset_congestion();
+                self.start_live().map_err(|e2| format!("{e} / {e2}"))
+            }
+        }
     }
 
     pub fn stop_live(&self) {

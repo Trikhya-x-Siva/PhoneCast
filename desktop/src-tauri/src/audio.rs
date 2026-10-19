@@ -312,7 +312,13 @@ impl Mixer {
 
         let (gg, gd, gm) = (
             s.game.effective_gain(),
-            s.discord.effective_gain(),
+            // Pure mode: game + mic only (the Discord strip can be "all of
+            // Chrome's sound", which must not reach the stream unasked).
+            if crate::live::pure() {
+                0.0
+            } else {
+                s.discord.effective_gain()
+            },
             s.mic.effective_gain(),
         );
         let peak = |v: &[f32], g: f32| v.iter().fold(0f32, |m, x| m.max(x.abs())) * g;

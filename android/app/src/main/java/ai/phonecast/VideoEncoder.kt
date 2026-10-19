@@ -70,12 +70,13 @@ class VideoEncoder(
             // clips and scenes catch up on these instead of asking for extra
             // ones, which cost the stream quality.
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
-            // 0 = realtime priority, at the rate we need: without an operating
-            // rate a realtime encoder clocks up to its maximum (heat for
-            // nothing); 60 fps is all the stream uses.
+            // 0 = realtime priority. Operating rate with headroom (2x): at
+            // exactly 60 the encoder clocked so low that, with a 1-frame
+            // pipeline, it managed only 34-47 fps on the real phone (the pacer
+            // waits for each frame to be taken). No KEY_LATENCY: letting the
+            // encoder pipeline 2-3 frames (~30 ms) keeps a steady 60.
             setInteger(MediaFormat.KEY_PRIORITY, 0)
-            setInteger(MediaFormat.KEY_OPERATING_RATE, fps)
-            setInteger(MediaFormat.KEY_LATENCY, 1)
+            setInteger(MediaFormat.KEY_OPERATING_RATE, fps * 2)
             // No B-frames: they make the decoder hold frames back (delay + judder).
             setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
             // Standard HD colour, tagged in the stream so the PC, players and

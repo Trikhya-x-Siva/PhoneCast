@@ -27,9 +27,10 @@ data class StreamSettings(
     val effectiveBitrate: Int
         get() = when {
             bitrateBps > 0 -> bitrateBps
-            // 16 Mbps: still above what the stream sends (12 Mbps at 1080p60
-            // after the PC re-encodes), and a cooler phone than 20.
-            transport == Transport.USB -> 16_000_000
+            // 24 Mbps over USB: the picture is compressed twice (phone, then
+            // the stream), so the phone's copy must be crisp; USB has room and
+            // the bitrate barely changes the heat (the encoder's speed does).
+            transport == Transport.USB -> 24_000_000
             else -> 16_000_000
         }
 
