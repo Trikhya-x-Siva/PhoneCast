@@ -540,6 +540,17 @@
     saveBannerSoon();
     renderChips(window.lastStatus || {});
   }
+  // Used by Stream profiles (profiles.js): the profile's game label, and its
+  // own message pop-up (custom rooms put the room ID and password there).
+  window.setBannerLabel = (v) => {
+    if (v && v !== bn.right) setLabel(v);
+  };
+  window.setBannerMessage = (text) => {
+    bn.custom = (text || "").slice(0, 48);
+    bn.popups.list.custom = !!text;
+    popupsChanged();
+    renderPopups();
+  };
   function renderChips(s) {
     const app = s.privacy && s.privacy.app;
     const phoneGame = app && app.game && app.label ? app.label : null;

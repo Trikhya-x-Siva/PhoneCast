@@ -18,6 +18,7 @@ mod live;
 mod mkv;
 mod prefs;
 mod presets;
+mod profiles;
 mod replay;
 mod scenes;
 mod setup;
@@ -975,6 +976,7 @@ fn main() {
             app.manage(core);
             app.manage(Install::default());
             app.manage(ai);
+            app.manage(profiles::Profiles::new());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -992,6 +994,20 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            profiles::get_profiles,
+            profiles::save_profiles,
+            profiles::reset_profile,
+            profiles::render_profile,
+            profiles::apply_profile,
+            profiles::profile_went_live,
+            profiles::twitch_login,
+            profiles::twitch_login_cancel,
+            profiles::twitch_logout,
+            profiles::twitch_search_category,
+            profiles::discord_test,
+            profiles::save_thumbnail_png,
+            profiles::open_thumbnails,
+            profiles::open_link_external,
             get_info,
             set_bitrate,
             request_keyframe,

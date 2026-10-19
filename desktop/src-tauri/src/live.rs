@@ -3009,7 +3009,7 @@ mod tests {
 // ---------------- DPAPI (stream key encryption) ----------------
 
 #[cfg(windows)]
-mod dpapi {
+pub(crate) mod dpapi {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
         CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB,
@@ -3072,7 +3072,7 @@ mod dpapi {
 }
 
 #[cfg(not(windows))]
-mod dpapi {
+pub(crate) mod dpapi {
     pub fn protect(s: &str) -> Result<String, String> {
         Ok(s.into())
     }
