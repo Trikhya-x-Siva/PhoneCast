@@ -140,7 +140,10 @@ class Sink:
             self.proc = subprocess.Popen(
                 [self.ffmpeg, "-v", "error", "-y", "-listen", "1", "-timeout", "-1",
                  "-i", f"rtmp://127.0.0.1:{RTMP_PORT}/live2/test", "-c", "copy", "-f", "flv", path],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                # Above normal, like the app's own FFmpeg: the stand-in for
+                # YouTube must not be starved by other work on this PC.
+                creationflags=0x00008000 if os.name == "nt" else 0)
             _, err = self.proc.communicate()
             if os.path.exists(path) and os.path.getsize(path) > 0:
                 self.segments.append({"path": path, "ended": time.time(), "err": err.decode(errors="replace")[-400:]})
