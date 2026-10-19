@@ -181,7 +181,8 @@ pub struct Store {
 /// 1 = ready-made texts in English; 2 = researched South Indian style
 /// (sections, disclaimers, one profile per game).
 /// 3 = templates from starter_profiles.json with three title styles.
-const TEXT_VERSION: u32 = 3;
+/// 4 = no language mention anywhere (titles, tags, descriptions).
+const TEXT_VERSION: u32 = 4;
 
 impl Default for Store {
     fn default() -> Self {
@@ -209,6 +210,31 @@ fn has_tamil(s: &str) -> bool {
 fn upgrade_texts(s: &mut Store) -> bool {
     if s.text_version >= TEXT_VERSION {
         return false;
+    }
+    if s.text_version == 3 {
+        // Same templates as v3 minus the language: strip it in place so the
+        // user's own edits to the ready-made profiles stay.
+        let d = Defaults::default();
+        if mentions_language(&s.defaults.tags) {
+            s.defaults.tags = d.tags;
+        }
+        if mentions_language(&s.defaults.hashtags) {
+            s.defaults.hashtags = d.hashtags;
+        }
+        s.defaults.rules = strip_language_text(&s.defaults.rules.replace(
+            "Tamil & English friendly chat — keep it clean and fun",
+            "Keep chat friendly, clean and fun",
+        ));
+        for p in &mut s.profiles {
+            strip_language(p);
+        }
+        for st in starter_profiles() {
+            if !s.profiles.iter().any(|p| p.id == st.id) {
+                s.profiles.push(st);
+            }
+        }
+        s.text_version = TEXT_VERSION;
+        return true;
     }
     let d = Defaults::default();
     s.defaults.rules = d.rules;
@@ -247,6 +273,101 @@ fn upgrade_texts(s: &mut Store) -> bool {
     }
     s.text_version = TEXT_VERSION;
     true
+}
+
+/// Words dropped by the v4 upgrade (the user asked for no language mention).
+const LANGUAGE_WORDS: [&str; 2] = ["tamil", "tanglish"];
+
+fn mentions_language(s: &str) -> bool {
+    let l = s.to_lowercase();
+    LANGUAGE_WORDS.iter().any(|w| l.contains(w))
+}
+
+fn is_language_word(token: &str) -> bool {
+    let t: String = token
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase();
+    LANGUAGE_WORDS.contains(&t.as_str())
+}
+
+/// Free text: drop the "Language: ..." info segment, then any standalone
+/// language word, keeping line breaks.
+fn strip_language_text(s: &str) -> String {
+    s.lines()
+        .map(|line| {
+            let mut line = line.to_string();
+            for seg in [
+                "🗣️ Language: Tamil + English · ",
+                " · 🗣️ Language: Tamil + English",
+            ] {
+                line = line.replace(seg, "");
+            }
+            if !mentions_language(&line) {
+                return line;
+            }
+            line.split(' ')
+                .filter(|t| !is_language_word(t))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        )
+}
+
+/// Comma lists (YouTube and Twitch tags): drop the word inside each tag,
+/// then empty and duplicate tags.
+fn strip_language_list(s: &str) -> String {
+    if !mentions_language(s) {
+        return s.to_string();
+    }
+    let mut seen = std::collections::HashSet::new();
+    s.split(',')
+        .map(|t| {
+            t.split_whitespace()
+                .filter(|w| !is_language_word(w))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|t| !t.is_empty() && seen.insert(t.to_lowercase()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Hashtags: drop any that name the language (#BGMITamil, #TamilGaming).
+fn strip_language_hashtags(s: &str) -> String {
+    if !mentions_language(s) {
+        return s.to_string();
+    }
+    s.split_whitespace()
+        .filter(|t| !mentions_language(t))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn strip_language(p: &mut Profile) {
+    for f in [
+        &mut p.name,
+        &mut p.mode,
+        &mut p.title,
+        &mut p.description,
+        &mut p.banner_label,
+        &mut p.announce_text,
+        &mut p.thumb.headline,
+        &mut p.thumb.subline,
+    ] {
+        *f = strip_language_text(f);
+    }
+    for t in &mut p.title_options {
+        *t = strip_language_text(t);
+    }
+    p.tags = strip_language_list(&p.tags);
+    p.twitch_tags = strip_language_list(&p.twitch_tags);
+    p.hashtags = strip_language_hashtags(&p.hashtags);
 }
 
 /// The ready-made profiles and shared texts, kept as data so they can be
@@ -1508,7 +1629,7 @@ mod tests {
         assert_eq!(s.defaults.channel, "Phantom Blitz");
         assert_eq!(s.defaults.youtube_handle, "charlescj2126");
         let bgmi = s.profiles.iter().find(|p| p.id == "bgmi").unwrap();
-        assert!(bgmi.title.starts_with("🔴 BGMI LIVE TAMIL"));
+        assert!(bgmi.title.starts_with("🔴 BGMI LIVE |"));
         assert_eq!(bgmi.count, 7, "stream count kept");
         assert!(!bgmi.announce, "user's switch kept");
         assert_eq!(bgmi.twitch.id, "123", "chosen Twitch category kept");
@@ -1604,7 +1725,7 @@ mod tests {
         assert!(r["youtube"]["tags"]
             .as_str()
             .unwrap()
-            .starts_with("Valorant live tamil"));
+            .starts_with("Valorant live,"));
         assert!(
             !r["youtube"]["description"]
                 .as_str()
@@ -1679,5 +1800,64 @@ mod tests {
     #[test]
     fn curl_config_quoting() {
         assert_eq!(cq(r#"a "b" \c"#), r#""a \"b\" \\c""#);
+    }
+
+    #[test]
+    fn no_language_mention_anywhere() {
+        let s = Store::default();
+        let d = &s.defaults;
+        for f in [&d.rules, &d.footer, &d.tags, &d.hashtags] {
+            assert!(!mentions_language(f), "{f}");
+        }
+        for p in &s.profiles {
+            let json = serde_json::to_string(p).unwrap();
+            assert!(!mentions_language(&json), "{}: {json}", p.id);
+            // The JSON file is what strip_language would make of itself.
+            let mut q = p.clone();
+            strip_language(&mut q);
+            assert_eq!(serde_json::to_string(&q).unwrap(), json, "{}", p.id);
+            let r = render(
+                &s,
+                &p.id,
+                &[("game".to_string(), "Valorant".to_string())].into(),
+            )
+            .unwrap();
+            assert!(!mentions_language(&r.to_string()), "{}", p.id);
+        }
+    }
+
+    #[test]
+    fn v3_store_loses_language_but_keeps_edits() {
+        let mut s = Store {
+            text_version: 3,
+            ..Store::default()
+        };
+        s.defaults.tags = "tamil gaming, tamil streamer".into();
+        s.defaults.hashtags = "#TamilGaming #TamilStreamer".into();
+        s.defaults.channel = "My Channel".into();
+        let p = s.profiles.iter_mut().find(|p| p.id == "bgmi").unwrap();
+        p.title = "🔴 BGMI LIVE TAMIL | My own hook | Day {n} | #BGMI".into();
+        p.description = "My intro
+🎮 BGMI · 📱 Phone · 🗣️ Language: Tamil + English · {mode}"
+            .into();
+        p.tags = "bgmi live tamil, bgmi tamil live, my tag".into();
+        p.hashtags = "#BGMI #BGMITamil".into();
+        p.twitch_tags = "BGMI, Tamil, English".into();
+        p.count = 41;
+        assert!(upgrade_texts(&mut s));
+        let p = s.profiles.iter().find(|p| p.id == "bgmi").unwrap();
+        assert_eq!(p.title, "🔴 BGMI LIVE | My own hook | Day {n} | #BGMI");
+        assert_eq!(
+            p.description,
+            "My intro
+🎮 BGMI · 📱 Phone · {mode}"
+        );
+        assert_eq!(p.tags, "bgmi live, my tag");
+        assert_eq!(p.hashtags, "#BGMI");
+        assert_eq!(p.twitch_tags, "BGMI, English");
+        assert_eq!(p.count, 41);
+        assert_eq!(s.defaults.channel, "My Channel");
+        assert_eq!(s.defaults.tags, Defaults::default().tags);
+        assert!(!upgrade_texts(&mut s));
     }
 }

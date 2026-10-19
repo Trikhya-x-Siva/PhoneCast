@@ -2,9 +2,9 @@
   "_about": "Ready-made stream profiles. Written with Gemini from PhoneCast's researched brief (South Indian live-stream style), then checked: neutral shared tags, typos fixed, no prize claims, @everyone controlled by the app's switch. Edit freely; variables are listed in profiles.rs VARIABLES.",
   "defaults": {
     "footer": "Welcome to {channel}! Hit subscribe & join the squad! 🚀\n\n🔗 FOLLOW & CONNECT:\n▶ YouTube: {channel_link}\n🟣 Twitch: {twitch}\n📸 Instagram: {instagram}\n💬 Discord: {discord}\n📧 Business: {email}\n\n💜 SUPPORT THE STREAM:\n⭐ Membership: {join}\n💬 Super Chat — only if you meet the age limit\n\n🎯 Goal: {goal}\n📅 Schedule: {schedule}\n\n🎮 MY SETUP:\n📱 Phone: {device}\n💻 PC: {pc}\n\n★ CHAT RULES ★\n{rules}\n\n{disclaimer}\n\n{tags}",
-    "rules": "❌ No spam, hate speech, or toxic abuse in chat\n❌ No self-promotion, channel links, or begging\n❌ No revealing personal info or room passwords early\n✅ Respect {channel}, mods, and fellow viewers always\n✅ Tamil & English friendly chat — keep it clean and fun\n✅ Follow stream instructions and enjoy the gaming vibe!",
-    "tags": "tamil gaming, tamil streamer, live stream tamil, tamil gaming live",
-    "hashtags": "#TamilGaming #TamilStreamer"
+    "rules": "❌ No spam, hate speech, or toxic abuse in chat\n❌ No self-promotion, channel links, or begging\n❌ No revealing personal info or room passwords early\n✅ Respect {channel}, mods, and fellow viewers always\n✅ Keep chat friendly, clean and fun\n✅ Follow stream instructions and enjoy the gaming vibe!",
+    "tags": "live gaming, gaming live stream, live gameplay, gaming stream",
+    "hashtags": "#LiveGaming #Gaming"
   },
   "profiles": [
     {
@@ -13,20 +13,28 @@
       "kind": "phone",
       "game": "BGMI",
       "mode": "Rank Push",
-      "title": "🔴 BGMI LIVE TAMIL | Conqueror Rank Push! | Day {n} | #BGMI",
+      "title": "🔴 BGMI LIVE | Conqueror Rank Push! | Day {n} | #BGMI",
       "titleOptions": [
-        "🔴 BGMI LIVE TAMIL | Conqueror Rank Push! | Day {n} | #BGMI",
-        "🔴 BGMI LIVE TAMIL | Road to Ace Master 1v4 Clutches! | Day {n} | #BGMI",
-        "🔴 BGMI LIVE TAMIL | New Update Meta & Push! | Day {n} | #BGMI"
+        "🔴 BGMI LIVE | Conqueror Rank Push! | Day {n} | #BGMI",
+        "🔴 BGMI LIVE | Road to Ace Master 1v4 Clutches! | Day {n} | #BGMI",
+        "🔴 BGMI LIVE | New Update Meta & Push! | Day {n} | #BGMI"
       ],
-      "description": "Grind to Conqueror begins! Let's push ranks with insane clutches and teamwork. 🔥\n🎮 BGMI · 📱 Phone · 🗣️ Language: Tamil + English · {mode}\n👇 Drop a like and subscribe for more action!",
+      "description": "Grind to Conqueror begins! Let's push ranks with insane clutches and teamwork. 🔥\n🎮 BGMI · 📱 Phone · {mode}\n👇 Drop a like and subscribe for more action!",
       "disclaimer": "⚠️ BGMI is a trademark of KRAFTON, Inc. This stream is for entertainment purposes only.",
-      "tags": "bgmi live tamil, bgmi tamil gameplay, bgmi rank push tamil, bgmi tamil live, battlegrounds mobile india tamil",
-      "hashtags": "#BGMI #BGMILive #BGMITamil #MobileGaming",
-      "twitch": { "name": "Battlegrounds Mobile India" },
-      "twitchTags": "BGMI, Mobile, Tamil, Shooter, Ranked, English",
+      "tags": "bgmi live, bgmi gameplay, bgmi rank push, battlegrounds mobile india",
+      "hashtags": "#BGMI #BGMILive #MobileGaming",
+      "twitch": {
+        "name": "Battlegrounds Mobile India"
+      },
+      "twitchTags": "BGMI, Mobile, Shooter, Ranked, English",
       "bannerLabel": "BGMI RANK PUSH",
-      "thumb": { "headline": "CONQUEROR PUSH", "subline": "ROAD TO ACE MASTER", "color1": "#f59e0b", "color2": "#7c3aed", "useFrame": true },
+      "thumb": {
+        "headline": "CONQUEROR PUSH",
+        "subline": "ROAD TO ACE MASTER",
+        "color1": "#f59e0b",
+        "color2": "#7c3aed",
+        "useFrame": true
+      },
       "announce": true,
       "announceText": "🔴 Live now — BGMI Rank Push! Come hang out and catch the action:\n{title}\n▶ {youtube}"
     },
@@ -36,20 +44,28 @@
       "kind": "rooms",
       "game": "BGMI",
       "mode": "Custom Rooms",
-      "title": "🔴 BGMI LIVE TAMIL | Viewer Custom Rooms & Free Entry! | Day {n} | #Customs",
+      "title": "🔴 BGMI LIVE | Viewer Custom Rooms & Free Entry! | Day {n} | #Customs",
       "titleOptions": [
-        "🔴 BGMI LIVE TAMIL | Viewer Custom Rooms & Free Entry! | Day {n} | #Customs",
-        "🔴 BGMI LIVE TAMIL | Non-Stop Room Matches! | Day {n} | #BGMI",
-        "🔴 BGMI LIVE TAMIL | Subscriber Special Custom War! | Day {n} | #Customs"
+        "🔴 BGMI LIVE | Viewer Custom Rooms & Free Entry! | Day {n} | #Customs",
+        "🔴 BGMI LIVE | Non-Stop Room Matches! | Day {n} | #BGMI",
+        "🔴 BGMI LIVE | Subscriber Special Custom War! | Day {n} | #Customs"
       ],
-      "description": "Join the custom room action with viewers! Free entry for everyone. 🎮\n🎮 BGMI · 📱 Phone · 🗣️ Language: Tamil + English · Viewer Custom Rooms\n🗺️ Map / mode: {map}\n\n📝 HOW TO JOIN:\n1️⃣ Subscribe & turn on notifications\n2️⃣ Watch the stream for the Room ID & Password\n3️⃣ Join fast before the slots fill!\n\n📜 ROOM RULES:\n✅ Play fair\n❌ No team-ups\n❌ No hackers or emulator players\n\n👇 Drop a like and subscribe for more customs!",
+      "description": "Join the custom room action with viewers! Free entry for everyone. 🎮\n🎮 BGMI · 📱 Phone · Viewer Custom Rooms\n🗺️ Map / mode: {map}\n\n📝 HOW TO JOIN:\n1️⃣ Subscribe & turn on notifications\n2️⃣ Watch the stream for the Room ID & Password\n3️⃣ Join fast before the slots fill!\n\n📜 ROOM RULES:\n✅ Play fair\n❌ No team-ups\n❌ No hackers or emulator players\n\n👇 Drop a like and subscribe for more customs!",
       "disclaimer": "ℹ️ BGMI is a trademark of KRAFTON, Inc. This is not an official KRAFTON event.",
-      "tags": "bgmi custom rooms tamil, bgmi custom match live, bgmi room match tamil, bgmi custom room live, bgmi tamil live",
-      "hashtags": "#BGMICustoms #CustomRooms #BGMITamil #BGMI",
-      "twitch": { "name": "Battlegrounds Mobile India" },
-      "twitchTags": "Customs, BGMI, Mobile, Tamil, Multiplayer, English",
+      "tags": "bgmi custom rooms, bgmi custom match live, bgmi room match, bgmi custom room live, bgmi live",
+      "hashtags": "#BGMICustoms #CustomRooms #BGMI",
+      "twitch": {
+        "name": "Battlegrounds Mobile India"
+      },
+      "twitchTags": "Customs, BGMI, Mobile, Multiplayer, English",
       "bannerLabel": "VIEWER CUSTOMS",
-      "thumb": { "headline": "CUSTOM ROOMS", "subline": "FREE ENTRY - JOIN NOW", "color1": "#22d3ee", "color2": "#7c3aed", "useFrame": true },
+      "thumb": {
+        "headline": "CUSTOM ROOMS",
+        "subline": "FREE ENTRY - JOIN NOW",
+        "color1": "#22d3ee",
+        "color2": "#7c3aed",
+        "useFrame": true
+      },
       "announce": true,
       "announceText": "🎮 Hosting viewer custom rooms right now in BGMI — grab your spot!\n{title}\n▶ {youtube}",
       "roomOnBanner": true
@@ -60,20 +76,28 @@
       "kind": "phone",
       "game": "eFootball",
       "mode": "Friendlies + Division",
-      "title": "🔴 EFOOTBALL LIVE TAMIL | Subscriber Friendlies & Division Push | Day {n} | #eFootball",
+      "title": "🔴 EFOOTBALL LIVE | Subscriber Friendlies & Division Push | Day {n} | #eFootball",
       "titleOptions": [
-        "🔴 EFOOTBALL LIVE TAMIL | Subscriber Friendlies & Division Push | Day {n} | #eFootball",
-        "🔴 EFOOTBALL LIVE TAMIL | Epic Matchday & Pro Gameplay! | Day {n} | #eFootball",
-        "🔴 EFOOTBALL LIVE TAMIL | Special Dream Team Showdown! | Day {n} | #eFootball"
+        "🔴 EFOOTBALL LIVE | Subscriber Friendlies & Division Push | Day {n} | #eFootball",
+        "🔴 EFOOTBALL LIVE | Epic Matchday & Pro Gameplay! | Day {n} | #eFootball",
+        "🔴 EFOOTBALL LIVE | Special Dream Team Showdown! | Day {n} | #eFootball"
       ],
-      "description": "Playing Division matches and friendly games with subscribers! ⚽\n🎮 eFootball · 📱 Phone · 🗣️ Language: Tamil + English · {mode}\n🤝 Want a friendly? Type JOIN + your eFootball name in chat\n👇 Drop a like and subscribe for more footy action!",
+      "description": "Playing Division matches and friendly games with subscribers! ⚽\n🎮 eFootball · 📱 Phone · {mode}\n🤝 Want a friendly? Type JOIN + your eFootball name in chat\n👇 Drop a like and subscribe for more footy action!",
       "disclaimer": "⚠️ eFootball™ is a trademark of KONAMI. These friendly matches are not an official KONAMI tournament.",
-      "tags": "efootball live tamil, efootball mobile tamil, efootball friendlies tamil, efootball division tamil, efootball tamil",
-      "hashtags": "#eFootball #eFootballMobile #eFootballTamil #Football",
-      "twitch": { "name": "eFootball" },
-      "twitchTags": "eFootball, Sports, Mobile, Tamil, Soccer, English",
+      "tags": "efootball live, efootball mobile, efootball friendlies, efootball division, efootball",
+      "hashtags": "#eFootball #eFootballMobile #Football",
+      "twitch": {
+        "name": "eFootball"
+      },
+      "twitchTags": "eFootball, Sports, Mobile, Soccer, English",
       "bannerLabel": "EFOOTBALL LIVE",
-      "thumb": { "headline": "DREAM TEAM", "subline": "DIVISION GRIND", "color1": "#16a34a", "color2": "#0ea5e9", "useFrame": true },
+      "thumb": {
+        "headline": "DREAM TEAM",
+        "subline": "DIVISION GRIND",
+        "color1": "#16a34a",
+        "color2": "#0ea5e9",
+        "useFrame": true
+      },
       "announce": true,
       "announceText": "⚽ Playing eFootball friendlies and Division live right now!\n{title}\n▶ {youtube}"
     },
@@ -83,20 +107,28 @@
       "kind": "pc",
       "game": "EA SPORTS FC 26",
       "mode": "Ultimate Team",
-      "title": "🔴 EA SPORTS FC 26 LIVE TAMIL | Ultimate Team Weekend League | Day {n} | #FC26",
+      "title": "🔴 EA SPORTS FC 26 LIVE | Ultimate Team Weekend League | Day {n} | #FC26",
       "titleOptions": [
-        "🔴 EA SPORTS FC 26 LIVE TAMIL | Ultimate Team Weekend League | Day {n} | #FC26",
-        "🔴 EA SPORTS FC 26 LIVE TAMIL | Meta Squad Building & Rage! | Day {n} | #FUT",
-        "🔴 EA SPORTS FC 26 LIVE TAMIL | Team of the Year Packed! | Day {n} | #FC26"
+        "🔴 EA SPORTS FC 26 LIVE | Ultimate Team Weekend League | Day {n} | #FC26",
+        "🔴 EA SPORTS FC 26 LIVE | Meta Squad Building & Rage! | Day {n} | #FUT",
+        "🔴 EA SPORTS FC 26 LIVE | Team of the Year Packed! | Day {n} | #FC26"
       ],
-      "description": "Building an unstoppable Ultimate Team and grinding Division Rivals / Weekend League! ⚽\n🎮 EA SPORTS FC 26 · 💻 PC · 🗣️ Language: Tamil + English · {mode}\n👇 Drop a like and subscribe for more goals!",
+      "description": "Building an unstoppable Ultimate Team and grinding Division Rivals / Weekend League! ⚽\n🎮 EA SPORTS FC 26 · 💻 PC · {mode}\n👇 Drop a like and subscribe for more goals!",
       "disclaimer": "⚠️ EA SPORTS FC™ 26 © Electronic Arts. This stream is for entertainment purposes only.",
-      "tags": "fc26 ultimate team tamil, ea sports fc 26 live tamil, fc 26 tamil, fut champions tamil, fc 26 live",
+      "tags": "fc26 ultimate team, ea sports fc 26 live, fc 26, fut champions, fc 26 live",
       "hashtags": "#FC26 #UltimateTeam #FUT #PCGaming",
-      "twitch": { "name": "EA Sports FC 26" },
-      "twitchTags": "FC26, UltimateTeam, Sports, Tamil, PC, English",
+      "twitch": {
+        "name": "EA Sports FC 26"
+      },
+      "twitchTags": "FC26, UltimateTeam, Sports, PC, English",
       "bannerLabel": "FC 26 ULTIMATE TEAM",
-      "thumb": { "headline": "ULTIMATE TEAM", "subline": "WEEKEND LEAGUE GRIND", "color1": "#22c55e", "color2": "#0ea5e9", "useFrame": true },
+      "thumb": {
+        "headline": "ULTIMATE TEAM",
+        "subline": "WEEKEND LEAGUE GRIND",
+        "color1": "#22c55e",
+        "color2": "#0ea5e9",
+        "useFrame": true
+      },
       "announce": true,
       "announceText": "⚽ Grinding Ultimate Team in EA SPORTS FC 26 right now!\n{title}\n▶ {youtube}"
     },
@@ -106,20 +138,28 @@
       "kind": "pc",
       "game": "Euro Truck Simulator 2",
       "mode": "Chill Drive",
-      "title": "🔴 ETS2 LIVE TAMIL | Chill Late Night Cargo Drive | Day {n} | #ETS2",
+      "title": "🔴 ETS2 LIVE | Chill Late Night Cargo Drive | Day {n} | #ETS2",
       "titleOptions": [
-        "🔴 ETS2 LIVE TAMIL | Chill Late Night Cargo Drive | Day {n} | #ETS2",
-        "🔴 ETS2 LIVE TAMIL | Heavy Haul Convoy & Radio Vibe | Day {n} | #Trucking",
-        "🔴 ETS2 LIVE TAMIL | New DLC Map Exploration! | Day {n} | #ETS2"
+        "🔴 ETS2 LIVE | Chill Late Night Cargo Drive | Day {n} | #ETS2",
+        "🔴 ETS2 LIVE | Heavy Haul Convoy & Radio Vibe | Day {n} | #Trucking",
+        "🔴 ETS2 LIVE | New DLC Map Exploration! | Day {n} | #ETS2"
       ],
-      "description": "Relaxing long-haul delivery across Europe with good music and chill vibes. 🚛\n🎮 Euro Truck Simulator 2 · 💻 PC · 🗣️ Language: Tamil + English · {mode}\n👇 Drop a like and subscribe for more drives!",
+      "description": "Relaxing long-haul delivery across Europe with good music and chill vibes. 🚛\n🎮 Euro Truck Simulator 2 · 💻 PC · {mode}\n👇 Drop a like and subscribe for more drives!",
       "disclaimer": "⚠️ Euro Truck Simulator 2 © SCS Software. This stream is for entertainment purposes only.",
-      "tags": "ets2 live tamil, euro truck simulator 2 tamil, ets2 tamil, chill gaming tamil, pc simulator tamil",
+      "tags": "ets2 live, euro truck simulator 2, ets2, chill gaming, pc simulator",
       "hashtags": "#ETS2 #EuroTruckSimulator2 #ChillStream #PCGaming",
-      "twitch": { "name": "Euro Truck Simulator 2" },
-      "twitchTags": "Simulator, Trucking, Chill, Tamil, PC, English",
+      "twitch": {
+        "name": "Euro Truck Simulator 2"
+      },
+      "twitchTags": "Simulator, Trucking, Chill, PC, English",
       "bannerLabel": "ETS2 CHILL DRIVE",
-      "thumb": { "headline": "CHILL TRUCKING", "subline": "EUROPE CARGO RUN", "color1": "#f97316", "color2": "#0ea5e9", "useFrame": true },
+      "thumb": {
+        "headline": "CHILL TRUCKING",
+        "subline": "EUROPE CARGO RUN",
+        "color1": "#f97316",
+        "color2": "#0ea5e9",
+        "useFrame": true
+      },
       "announce": true,
       "announceText": "🚛 Live with a relaxing Euro Truck Simulator 2 cargo run!\n{title}\n▶ {youtube}"
     },
@@ -129,20 +169,28 @@
       "kind": "pc",
       "game": "Watch Dogs 2",
       "mode": "Story",
-      "title": "🔴 WATCH DOGS 2 LIVE TAMIL | DedSec Hacker Story | Part {n} | #WatchDogs2",
+      "title": "🔴 WATCH DOGS 2 LIVE | DedSec Hacker Story | Part {n} | #WatchDogs2",
       "titleOptions": [
-        "🔴 WATCH DOGS 2 LIVE TAMIL | DedSec Hacker Story | Part {n} | #WatchDogs2",
-        "🔴 WATCH DOGS 2 LIVE TAMIL | San Francisco Chaos & Stealth! | Part {n} | #WatchDogs2",
-        "🔴 WATCH DOGS 2 LIVE TAMIL | Finale & Full Exploration! | Part {n} | #WatchDogs2"
+        "🔴 WATCH DOGS 2 LIVE | DedSec Hacker Story | Part {n} | #WatchDogs2",
+        "🔴 WATCH DOGS 2 LIVE | San Francisco Chaos & Stealth! | Part {n} | #WatchDogs2",
+        "🔴 WATCH DOGS 2 LIVE | Finale & Full Exploration! | Part {n} | #WatchDogs2"
       ],
-      "description": "Hacking our way through San Francisco to expose ctOS 2.0. 💻\n🎮 Watch Dogs 2 · 💻 PC · 🗣️ Language: Tamil + English · Story Walkthrough\n👇 Drop a like and subscribe for more episodes!",
+      "description": "Hacking our way through San Francisco to expose ctOS 2.0. 💻\n🎮 Watch Dogs 2 · 💻 PC · Story Walkthrough\n👇 Drop a like and subscribe for more episodes!",
       "disclaimer": "⚠️ Watch Dogs® 2 © Ubisoft. Fictional game — viewer discretion advised for mature themes.",
-      "tags": "watch dogs 2 tamil gameplay, watch dogs 2 live tamil, watch dogs 2 tamil, dedsec story tamil, pc game walkthrough tamil",
+      "tags": "watch dogs 2 gameplay, watch dogs 2 live, watch dogs 2, dedsec story, pc game walkthrough",
       "hashtags": "#WatchDogs2 #DedSec #StoryMode #PCGaming",
-      "twitch": { "name": "Watch Dogs 2" },
-      "twitchTags": "WatchDogs2, Action, Story, Tamil, PC, English",
+      "twitch": {
+        "name": "Watch Dogs 2"
+      },
+      "twitchTags": "WatchDogs2, Action, Story, PC, English",
       "bannerLabel": "WATCH DOGS 2",
-      "thumb": { "headline": "DEDSEC HACKING", "subline": "STORY WALKTHROUGH", "color1": "#06b6d4", "color2": "#a855f7", "useFrame": true },
+      "thumb": {
+        "headline": "DEDSEC HACKING",
+        "subline": "STORY WALKTHROUGH",
+        "color1": "#06b6d4",
+        "color2": "#a855f7",
+        "useFrame": true
+      },
       "announce": true,
       "announceText": "💻 Continuing the Watch Dogs 2 DedSec story right now!\n{title}\n▶ {youtube}"
     },
@@ -152,20 +200,28 @@
       "kind": "pc",
       "game": "Detroit: Become Human",
       "mode": "Full Story",
-      "title": "🔴 DETROIT: BECOME HUMAN LIVE TAMIL | Full Story Choices | Part {n} | #Detroit",
+      "title": "🔴 DETROIT: BECOME HUMAN LIVE | Full Story Choices | Part {n} | #Detroit",
       "titleOptions": [
-        "🔴 DETROIT: BECOME HUMAN LIVE TAMIL | Full Story Choices | Part {n} | #Detroit",
-        "🔴 DETROIT: BECOME HUMAN LIVE TAMIL | Emotional Decisions & Survival | Part {n} | #Detroit",
-        "🔴 DETROIT: BECOME HUMAN LIVE TAMIL | Ultimate Ending Route! | Part {n} | #Detroit"
+        "🔴 DETROIT: BECOME HUMAN LIVE | Full Story Choices | Part {n} | #Detroit",
+        "🔴 DETROIT: BECOME HUMAN LIVE | Emotional Decisions & Survival | Part {n} | #Detroit",
+        "🔴 DETROIT: BECOME HUMAN LIVE | Ultimate Ending Route! | Part {n} | #Detroit"
       ],
-      "description": "Shaping android destinies through every critical choice and consequence. 🤖\n🎮 Detroit: Become Human · 💻 PC · 🗣️ Language: Tamil + English · Interactive Story Playthrough\n👇 Drop a like and subscribe for more story chapters!",
+      "description": "Shaping android destinies through every critical choice and consequence. 🤖\n🎮 Detroit: Become Human · 💻 PC · Interactive Story Playthrough\n👇 Drop a like and subscribe for more story chapters!",
       "disclaimer": "⚠️ Detroit: Become Human © Quantic Dream / Sony Interactive Entertainment. Mature story — viewer discretion advised.",
-      "tags": "detroit become human tamil, detroit become human live tamil, detroit become human gameplay tamil, choice game tamil, interactive story tamil",
+      "tags": "detroit become human, detroit become human live, detroit become human gameplay, choice game, interactive story",
       "hashtags": "#DetroitBecomeHuman #StoryMode #PCGaming",
-      "twitch": { "name": "Detroit: Become Human" },
-      "twitchTags": "Detroit, Story, Choices, Tamil, PC, English",
+      "twitch": {
+        "name": "Detroit: Become Human"
+      },
+      "twitchTags": "Detroit, Story, Choices, PC, English",
       "bannerLabel": "DETROIT STORY",
-      "thumb": { "headline": "CHOICES & FATE", "subline": "ANDROID REVOLUTION", "color1": "#38bdf8", "color2": "#1e3a8a", "useFrame": true },
+      "thumb": {
+        "headline": "CHOICES & FATE",
+        "subline": "ANDROID REVOLUTION",
+        "color1": "#38bdf8",
+        "color2": "#1e3a8a",
+        "useFrame": true
+      },
       "announce": true,
       "announceText": "🤖 Live playing Detroit: Become Human — help me choose!\n{title}\n▶ {youtube}"
     },
@@ -175,20 +231,28 @@
       "kind": "pc",
       "game": "PUBG: BATTLEGROUNDS",
       "mode": "Rank Push",
-      "title": "🔴 PUBG PC LIVE TAMIL | Rank Push to Master | Day {n} | #PUBG",
+      "title": "🔴 PUBG PC LIVE | Rank Push to Master | Day {n} | #PUBG",
       "titleOptions": [
-        "🔴 PUBG PC LIVE TAMIL | Rank Push to Master | Day {n} | #PUBG",
-        "🔴 PUBG PC LIVE TAMIL | Intense Squad Gunfights & Wins | Day {n} | #PUBGBattlegrounds",
-        "🔴 PUBG PC LIVE TAMIL | Ranked Season Reset Grind! | Day {n} | #PUBG"
+        "🔴 PUBG PC LIVE | Rank Push to Master | Day {n} | #PUBG",
+        "🔴 PUBG PC LIVE | Intense Squad Gunfights & Wins | Day {n} | #PUBGBattlegrounds",
+        "🔴 PUBG PC LIVE | Ranked Season Reset Grind! | Day {n} | #PUBG"
       ],
-      "description": "Hardcore tactical survival and rank push on PUBG PC. 🔥\n🎮 PUBG: BATTLEGROUNDS · 💻 PC · 🗣️ Language: Tamil + English · {mode}\n👇 Drop a like and subscribe for more chicken dinners!",
+      "description": "Hardcore tactical survival and rank push on PUBG PC. 🔥\n🎮 PUBG: BATTLEGROUNDS · 💻 PC · {mode}\n👇 Drop a like and subscribe for more chicken dinners!",
       "disclaimer": "⚠️ PUBG: BATTLEGROUNDS © KRAFTON, Inc. This stream is for entertainment purposes only.",
-      "tags": "pubg pc live tamil, pubg battlegrounds tamil, pubg pc rank push tamil, pubg pc tamil, pubg live tamil",
+      "tags": "pubg pc live, pubg battlegrounds, pubg pc rank push, pubg pc, pubg live",
       "hashtags": "#PUBG #PUBGBattlegrounds #PUBGPC #PCGaming",
-      "twitch": { "name": "PUBG: BATTLEGROUNDS" },
-      "twitchTags": "PUBG, Shooter, BattleRoyale, Tamil, PC, English",
+      "twitch": {
+        "name": "PUBG: BATTLEGROUNDS"
+      },
+      "twitchTags": "PUBG, Shooter, BattleRoyale, PC, English",
       "bannerLabel": "PUBG PC RANKED",
-      "thumb": { "headline": "CHICKEN DINNER", "subline": "PC RANK PUSH", "color1": "#eab308", "color2": "#7c3aed", "useFrame": true },
+      "thumb": {
+        "headline": "CHICKEN DINNER",
+        "subline": "PC RANK PUSH",
+        "color1": "#eab308",
+        "color2": "#7c3aed",
+        "useFrame": true
+      },
       "announce": true,
       "announceText": "🔥 Grinding ranked matches on PUBG PC right now!\n{title}\n▶ {youtube}"
     },
@@ -198,20 +262,28 @@
       "kind": "pc",
       "game": "",
       "mode": "Gameplay",
-      "title": "🔴 {game} LIVE TAMIL | Gameplay & Chill | Day {n} | #Gaming",
+      "title": "🔴 {game} LIVE | Gameplay & Chill | Day {n} | #Gaming",
       "titleOptions": [
-        "🔴 {game} LIVE TAMIL | Gameplay & Chill | Day {n} | #Gaming",
-        "🔴 {game} LIVE TAMIL | Epic Moments & Pro Play | Day {n} | #PCGaming",
-        "🔴 {game} LIVE TAMIL | Special Update & Gameplay! | Day {n} | #Gaming"
+        "🔴 {game} LIVE | Gameplay & Chill | Day {n} | #Gaming",
+        "🔴 {game} LIVE | Epic Moments & Pro Play | Day {n} | #PCGaming",
+        "🔴 {game} LIVE | Special Update & Gameplay! | Day {n} | #Gaming"
       ],
-      "description": "Diving into {game} for an awesome gaming session! 🎮\n🎮 {game} · 💻 PC · 🗣️ Language: Tamil + English · {mode}\n👇 Drop a like and subscribe for more content!",
+      "description": "Diving into {game} for an awesome gaming session! 🎮\n🎮 {game} · 💻 PC · {mode}\n👇 Drop a like and subscribe for more content!",
       "disclaimer": "⚠️ {game} © its respective owner / publisher. This stream is for entertainment purposes only.",
-      "tags": "{game} live tamil, {game} gameplay tamil, pc gaming tamil",
+      "tags": "{game} live, {game} gameplay, pc gaming",
       "hashtags": "#PCGaming #LiveStream",
-      "twitch": { "name": "" },
-      "twitchTags": "Gaming, Tamil, PC, Gameplay, English",
+      "twitch": {
+        "name": ""
+      },
+      "twitchTags": "Gaming, PC, Gameplay, English",
       "bannerLabel": "{game} LIVE",
-      "thumb": { "headline": "{game}", "subline": "LIVE STREAM", "color1": "#ef4444", "color2": "#7c3aed", "useFrame": true },
+      "thumb": {
+        "headline": "{game}",
+        "subline": "LIVE STREAM",
+        "color1": "#ef4444",
+        "color2": "#7c3aed",
+        "useFrame": true
+      },
       "announce": false,
       "announceText": "🖥️ Streaming {game} live right now — come join!\n{title}\n▶ {youtube}"
     }

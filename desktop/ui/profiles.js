@@ -361,7 +361,7 @@
     ctx.fillText(head, 56, hy);
     ctx.shadowBlur = 0;
 
-    // Subline (often Tamil).
+    // Subline.
     const sub = t.subline || "";
     const subFamily = `"Nirmala UI", "Segoe UI", sans-serif`;
     const sp = fitFont(ctx, sub, 800, subFamily, textW, 84, 36);
@@ -486,9 +486,9 @@
     if (b.dataset.add !== undefined) {
       const id = `custom${Date.now().toString(36)}`;
       draft.profiles.push({
-        id, name: "New profile", kind: "pc", game: "", mode: "Gameplay", title: "🔴 {game} LIVE TAMIL | {mode} 🔥 | Day {n}",
-        titleOptions: ["🔴 {game} LIVE TAMIL | {mode} 🔥 | Day {n}", "🔴 {game} LIVE TAMIL | Epic Moments! | Day {n}", "🔴 {game} LIVE TAMIL | Special Stream! | Day {n}"],
-        description: "", tags: "", hashtags: "", bannerLabel: "{game}", twitch: { id: "", name: "" }, twitchTags: "Tamil",
+        id, name: "New profile", kind: "pc", game: "", mode: "Gameplay", title: "🔴 {game} LIVE | {mode} 🔥 | Day {n}",
+        titleOptions: ["🔴 {game} LIVE | {mode} 🔥 | Day {n}", "🔴 {game} LIVE | Epic Moments! | Day {n}", "🔴 {game} LIVE | Special Stream! | Day {n}"],
+        description: "", tags: "", hashtags: "", bannerLabel: "{game}", twitch: { id: "", name: "" }, twitchTags: "Gaming",
         thumb: { headline: "{game}", subline: "{mode}", color1: "#8b5cf6", color2: "#22d3ee", useFrame: true },
         announce: false, announceText: "🔴 LIVE: {title}\n▶ {youtube}", announceEveryone: false, roomOnBanner: false,
         disclaimer: "⚠️ {game} © its publisher. Streamed for entertainment.", count: 0,
