@@ -475,10 +475,11 @@
     if (b.dataset.add !== undefined) {
       const id = `custom${Date.now().toString(36)}`;
       draft.profiles.push({
-        id, name: "New profile", kind: "phone", game: "", mode: "", title: "🔴 {game} Tamil Live | Day {n}",
+        id, name: "New profile", kind: "pc", game: "", mode: "Gameplay", title: "🔴 {game} LIVE TAMIL | {mode} 🔥 | Day {n}",
         description: "", tags: "", hashtags: "", bannerLabel: "{game}", twitch: { id: "", name: "" }, twitchTags: "Tamil",
-        thumb: { headline: "{game}", subline: "Tamil Live", color1: "#8b5cf6", color2: "#22d3ee", useFrame: true },
-        announce: false, announceText: "🔴 LIVE: {title}\n▶ {youtube}", announceEveryone: false, roomOnBanner: false, count: 0,
+        thumb: { headline: "{game}", subline: "{mode}", color1: "#8b5cf6", color2: "#22d3ee", useFrame: true },
+        announce: false, announceText: "🔴 LIVE: {title}\n▶ {youtube}", announceEveryone: false, roomOnBanner: false,
+        disclaimer: "⚠️ {game} © its publisher. Streamed for entertainment.", count: 0,
       });
       tab = id;
     } else tab = b.dataset.tab;
@@ -507,7 +508,12 @@
         ${inp("defaults.instagram", "Instagram link", d.instagram, { half: true, ph: "https://instagram.com/…" })}
         ${inp("defaults.discordInvite", "Discord invite", d.discordInvite, { half: true, ph: "https://discord.gg/…" })}
         ${inp("defaults.schedule", "Schedule", d.schedule, { half: true })}
+        ${inp("defaults.goal", "Channel goal", d.goal, { half: true, ph: "Road to 1K subscribers" })}
+        ${inp("defaults.email", "Business email (optional)", d.email, { half: true, ph: "collabs@…" })}
+        ${inp("defaults.device", "Phone you play on", d.device, { half: true, ph: "e.g. OnePlus 13R" })}
+        ${inp("defaults.pc", "PC specs", d.pc, { half: true, ph: "e.g. i5-13450HX · RTX 4050 · 16 GB" })}
       </div>
+      <p class="hint">Empty fields are left out of the description automatically. Don't put a personal phone number or UPI ID here — viewers can use Super Chat and channel memberships safely instead.</p>
       ${inp("defaults.footer", "Description footer (under every description)", d.footer, { area: true, rows: 9 })}
       ${inp("defaults.rules", "Chat rules <code>{rules}</code>", d.rules, { area: true, rows: 4 })}
       <div class="pf-grid">
@@ -519,7 +525,7 @@
   function profilePane(p) {
     const i = draft.profiles.indexOf(p);
     const k = `profiles.${i}`;
-    const builtin = ["bgmi", "rooms", "efootball", "pc"].includes(p.id);
+    const builtin = ["bgmi", "rooms", "efootball", "fc26", "ets2", "wd2", "detroit", "pubgpc", "pc"].includes(p.id);
     return `<h3>${escapeHtml(p.name)} <small class="muted">· used ${p.count} time${p.count === 1 ? "" : "s"}</small></h3>
       <div class="pf-grid">
         ${inp(`${k}.name`, "Profile name", p.name, { half: true })}
@@ -532,6 +538,7 @@
       </div>
       ${inp(`${k}.title`, "Title template", p.title, { max: 200, hint: "YouTube allows 100 characters, Twitch 140" })}
       ${inp(`${k}.description`, "Description (the shared footer is added below it)", p.description, { area: true, rows: 5 })}
+      ${inp(`${k}.disclaimer`, "Disclaimer <code>{disclaimer}</code>", p.disclaimer, { area: true, rows: 2, hint: "Who owns the game, and “not an official event” for rooms. Keep it short and true." })}
       <div class="pf-grid">
         ${inp(`${k}.tags`, "Extra YouTube tags", p.tags, { half: true })}
         ${inp(`${k}.hashtags`, "Extra hashtags", p.hashtags, { half: true })}
