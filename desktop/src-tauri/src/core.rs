@@ -1340,6 +1340,8 @@ impl Core {
             diag::log("live", format!("ending the stream: {why}"));
         }
         self.live.stop();
+        // The next broadcast plans with the measured upload again.
+        self.live.reset_congestion();
     }
 
     // ---------------- preview (WebSocket to the UI) ----------------
@@ -1464,6 +1466,25 @@ impl Core {
             let privacy_on = self.prefs.lock().unwrap().privacy_cover;
             let on_screen = self.phone_app.lock().unwrap().clone();
             status["bannerOn"] = json!(crate::banner_feed::is_on());
+            // The upload couldn't keep up: lower once (2-3 s pause) instead
+            // of dropping picture every few seconds for the rest of the stream.
+            if let Some(mbps) = self.live.lower_if_congested() {
+                diag::log(
+                    "live",
+                    format!("upload can't keep up: lowering quality (budget {mbps:.1} Mbps)"),
+                );
+                app.emit(
+                    "notice",
+                    json!({"text": "Your internet couldn't keep up, so OSSG lowered the stream quality (a 2-second pause, then smooth)."}),
+                )
+                .ok();
+                let me = self.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = me.switch_live() {
+                        diag::log("live", format!("lowering quality failed: {e}"));
+                    }
+                });
+            }
             let (playing, waiting) = crate::banner_feed::moment_status();
             status["bannerMoment"] = json!({ "playing": playing, "waiting": waiting });
             status["privacy"] = json!({

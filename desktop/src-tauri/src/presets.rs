@@ -897,6 +897,23 @@ pub const HEADROOM: f64 = 0.70;
 /// mean). When the total does not fit into 70% of it, non-main destinations
 /// step down to their next lower preset first; the main destination is
 /// lowered only after every other one is at its lowest.
+/// The same kind of preset at 1080p or less: the phone sends a 1920-wide
+/// picture, so more than 1080p only scales it up (looks no sharper, costs
+/// upload and heat).
+pub fn at_most_1080(platform: Platform, id: &str) -> &'static str {
+    let pr = platform.preset(id);
+    if pr.h <= 1080 {
+        return pr.id;
+    }
+    platform
+        .presets()
+        .iter()
+        .filter(|q| q.h <= 1080 && q.codec == pr.codec && q.fps == pr.fps)
+        .max_by_key(|q| (q.h, q.kbps))
+        .map(|q| q.id)
+        .unwrap_or_else(|| platform.default_preset(pr.codec == Codec::Hevc).id)
+}
+
 pub fn plan(dests: &[DestInput], upload_mbps: Option<f64>, hevc: bool) -> Plan {
     let mut issues = Vec::new();
     if dests.is_empty() {
@@ -1459,4 +1476,13 @@ mod tests {
             .all(|p| p["codec"] == "h264"));
         assert_eq!(yt["defaultPreset"], "yt-1080p60-h264");
     }
+
+    #[test]
+    fn phone_streams_stay_at_most_1080p() {
+        assert_eq!(at_most_1080(Platform::Youtube, "yt-1440p60-hevc"), "yt-1080p60-hevc");
+        assert_eq!(at_most_1080(Platform::Youtube, "yt-1080p60-hevc"), "yt-1080p60-hevc");
+        let p = Platform::Youtube.preset(at_most_1080(Platform::Youtube, "yt-1440p60-hevc-lite"));
+        assert!(p.h <= 1080 && p.fps == 60, "{}", p.id);
+    }
+
 }

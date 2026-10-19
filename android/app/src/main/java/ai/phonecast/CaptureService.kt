@@ -287,12 +287,19 @@ class CaptureService : Service(), StreamClient.Listener {
     /** Once per second: adaptive bitrate + phone health report. */
     private val tick = object : Runnable {
         override fun run() {
-            val enc = encoder
+            // A stats hiccup must never take the stream down with it.
+            runCatching { tickOnce() }.onFailure { Log.e(TAG, "stats tick failed", it) }
+            worker.postDelayed(this, 1000)
+        }
+
+        private fun tickOnce() {
             val c = client
-            if (enc != null && c != null) {
+            if (encoder != null && c != null) {
                 val now = System.currentTimeMillis()
                 val thermal = getSystemService(PowerManager::class.java).currentThermalStatus
                 applyThermal(thermal, now)
+                // The encoder as it is after the heat check (it may have changed).
+                val enc = encoder ?: return
                 val ceiling = if (thermalLimited) minOf(targetBitrate, thermalCap) else targetBitrate
                 if (currentBitrate < ceiling && now - lastCongestionMs > 3000) {
                     setCurrentBitrate(minOf(ceiling, (currentBitrate * 1.1).toInt()))
@@ -345,7 +352,6 @@ class CaptureService : Service(), StreamClient.Listener {
                 }
                 updateNotification()
             }
-            worker.postDelayed(this, 1000)
         }
     }
 
@@ -354,15 +360,14 @@ class CaptureService : Service(), StreamClient.Listener {
         if (!settings.heatProtect) return
         if (thermal >= PowerManager.THERMAL_STATUS_MODERATE) {
             lastHotMs = now
-            if (!thermalLimited) {
+            // Bitrate only, never the resolution: the stream stays true 1080p
+            // (a smaller picture looked blurry scaled up on stream).
+            val share = if (thermal >= PowerManager.THERMAL_STATUS_SEVERE) 0.5 else 0.7
+            val cap = maxOf(MIN_BITRATE, (targetBitrate * share).toInt())
+            if (!thermalLimited || cap < thermalCap) {
                 thermalLimited = true
-                thermalCap = maxOf(MIN_BITRATE, (targetBitrate * 0.6).toInt())
+                thermalCap = cap
                 Log.i(TAG, "phone hot (level $thermal): bitrate capped at ${thermalCap / 1000} kbps")
-            }
-            if (thermal >= PowerManager.THERMAL_STATUS_SEVERE && sizeCap == 0) {
-                sizeCap = 1280
-                val (w, h) = captureSize()
-                resizeTo(w, h, "heat protection")
             }
         } else if (thermalLimited && now - lastHotMs > 60_000) {
             thermalLimited = false

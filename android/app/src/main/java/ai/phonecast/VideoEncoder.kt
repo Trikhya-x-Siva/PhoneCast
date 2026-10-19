@@ -98,7 +98,9 @@ class VideoEncoder(
         }
     }
 
-    val encoderName: String get() = mediaCodec.name
+    // Read once: asking a released codec for its name throws (the stats
+    // timer did, right after a heat-driven encoder swap, and crashed the app).
+    val encoderName: String by lazy { runCatching { mediaCodec.name }.getOrDefault("?") }
 
     private fun bitrateMode(): Int {
         val caps = runCatching {

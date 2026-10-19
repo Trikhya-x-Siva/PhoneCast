@@ -1256,9 +1256,10 @@ function renderPrivacy(s) {
   $("privacyHint").textContent = hint;
   if (p.on && window.bannerReady && !applying && performance.now() - privacyPrepTry > 10000) {
     privacyPrepTry = performance.now();
+    // Every scene ready before it is clicked: a click then switches at
+    // once instead of making the scene first (seconds, while live).
     (async () => {
-      await prepareScene("brb");
-      await prepareScene("stinger");
+      for (const n of ["brb", "stinger", "starting", "thanks"]) await prepareScene(n);
     })().catch(() => {});
   }
 }

@@ -512,6 +512,9 @@ pub struct DestStatus {
     pub seconds: u64,
     pub reconnects: u32,
     pub quality: String,
+    /// When FFmpeg's send queue overflowed (picture dropped).
+    #[serde(skip)]
+    pub queue_full: Vec<Instant>,
 }
 
 pub struct Dest {
@@ -531,6 +534,12 @@ pub struct Live {
     ffmpeg: Mutex<Option<PathBuf>>,
     encoders: Arc<Mutex<Option<Encoders>>>,
     started: Mutex<Option<Instant>>,
+    /// Upload budget (Mbps) after the stream couldn't keep up, for the rest
+    /// of this broadcast; overrides the measured upload.
+    budget_override: Mutex<Option<f64>>,
+    /// What the running stream sends (video + audio kbps, all platforms).
+    total_kbps: Mutex<u32>,
+    last_lowered: Mutex<Option<Instant>>,
 }
 
 impl Live {
@@ -541,6 +550,9 @@ impl Live {
             ffmpeg: Mutex::new(None),
             encoders: Arc::new(Mutex::new(None)),
             started: Mutex::new(None),
+            budget_override: Mutex::new(None),
+            total_kbps: Mutex::new(0),
+            last_lowered: Mutex::new(None),
         });
         live.reload_ffmpeg();
         live
@@ -725,7 +737,17 @@ impl Live {
         let s = self.settings.lock().unwrap().clone();
 
         // Pre-flight: platform limits + upload budget. Blocks on errors.
-        let plan = presets::plan(&s.inputs(), s.upload_mbps, enc.hevc_hw());
+        // Phone games: at most 1080p (the phone sends 1920 wide; above that
+        // is only upscaled). This PC's own games may go higher.
+        let mut inputs = s.inputs();
+        if pc.is_none() {
+            for i in &mut inputs {
+                i.preset = presets::at_most_1080(i.platform, &i.preset).into();
+            }
+        }
+        let budget = (*self.budget_override.lock().unwrap()).or(s.upload_mbps);
+        let plan = presets::plan(&inputs, budget, enc.hevc_hw());
+        *self.total_kbps.lock().unwrap() = plan.total_kbps;
         if !plan.can_start {
             let first = plan
                 .issues
@@ -787,6 +809,7 @@ impl Live {
                 seconds: 0,
                 reconnects: 0,
                 quality: p.label.split(" · ").next().unwrap_or(p.id).into(),
+                queue_full: Vec::new(),
             }));
             let stop = Arc::new(AtomicBool::new(false));
             // ~15 s of buffer (video + 10 ms audio packets): rides out upload and
@@ -885,6 +908,48 @@ impl Live {
         SWITCHING.store(true, Ordering::SeqCst);
         self.stop_and_wait(Duration::from_secs(5));
         SWITCHING.store(false, Ordering::SeqCst);
+    }
+
+    /// The upload couldn't keep up (FFmpeg's send queue overflowed twice in
+    /// a minute, each time dropping picture up to the next keyframe): plan
+    /// the rest of the broadcast with 30% less. Returns the new budget, or
+    /// None if not needed / lowered less than 60 s ago.
+    pub fn lower_if_congested(&self) -> Option<f64> {
+        let congested = self.dests.lock().unwrap().iter().any(|d| {
+            let s = d.status.lock().unwrap();
+            s.queue_full
+                .iter()
+                .filter(|t| t.elapsed() < Duration::from_secs(60))
+                .count()
+                >= 2
+        });
+        if !congested
+            || self
+                .last_lowered
+                .lock()
+                .unwrap()
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
+        {
+            return None;
+        }
+        let now_kbps = *self.total_kbps.lock().unwrap();
+        if now_kbps == 0 {
+            return None;
+        }
+        // The planner uses 70% of the budget: this lands ~30% under now.
+        let mbps = now_kbps as f64 * 0.7 / 1000.0 / presets::HEADROOM;
+        *self.budget_override.lock().unwrap() = Some(mbps);
+        *self.last_lowered.lock().unwrap() = Some(Instant::now());
+        for d in self.dests.lock().unwrap().iter() {
+            d.status.lock().unwrap().queue_full.clear();
+        }
+        Some(mbps)
+    }
+
+    /// A new broadcast plans with the measured upload again.
+    pub fn reset_congestion(&self) {
+        *self.budget_override.lock().unwrap() = None;
+        *self.last_lowered.lock().unwrap() = None;
     }
 
     pub fn stop(&self) {
@@ -1156,6 +1221,7 @@ pub fn spawn_job(
         seconds: 0,
         reconnects: 0,
         quality: format!("{}p", job.h),
+        queue_full: Vec::new(),
     }));
     let stop = Arc::new(AtomicBool::new(false));
     let (tx, rx) = SinkTx::new(2400);
@@ -1628,6 +1694,12 @@ fn watch_progress(
                     }
                 }
                 Line::Warning(msg) => {
+                    if msg.to_lowercase().contains("queue full") {
+                        let mut s = status.lock().unwrap();
+                        s.queue_full
+                            .retain(|t| t.elapsed() < Duration::from_secs(120));
+                        s.queue_full.push(Instant::now());
+                    }
                     // Throttled: these can repeat every frame.
                     if last_warn.is_none_or(|t: Instant| t.elapsed() > Duration::from_secs(5)) {
                         last_warn = Some(Instant::now());
@@ -2860,6 +2932,7 @@ mod tests {
                 seconds: 0,
                 reconnects: 0,
                 quality: "1440p60".into(),
+                queue_full: Vec::new(),
             }));
             let stop = Arc::new(AtomicBool::new(false));
             let (mut tx, rx) = SinkTx::new(800);
