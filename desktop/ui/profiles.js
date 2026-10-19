@@ -546,7 +546,7 @@
       <h4>Thumbnail</h4>
       <div class="pf-grid">
         ${inp(`${k}.thumb.headline`, "Big text", p.thumb.headline, { half: true, max: 40 })}
-        ${inp(`${k}.thumb.subline`, "Second line (Tamil works)", p.thumb.subline, { half: true, max: 60 })}
+        ${inp(`${k}.thumb.subline`, "Second line", p.thumb.subline, { half: true, max: 60 })}
         ${inp(`${k}.thumb.color1`, "Colour 1", p.thumb.color1, { half: true, type: "color" })}
         ${inp(`${k}.thumb.color2`, "Colour 2", p.thumb.color2, { half: true, type: "color" })}
       </div>

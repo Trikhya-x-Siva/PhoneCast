@@ -36,7 +36,7 @@ pub const VARIABLES: &[(&str, &str)] = &[
     ("mode", "Mode / what you're doing (e.g. Rank push)"),
     ("n", "Stream number for this profile (counts up by itself)"),
     ("date", "Date, e.g. 19 Oct"),
-    ("day", "Weekday in Tamil"),
+    ("day", "Weekday, e.g. Saturday"),
     ("time", "Start time, e.g. 9:30 PM"),
     ("room", "Custom room ID"),
     ("pass", "Custom room password"),
@@ -82,13 +82,13 @@ impl Default for Defaults {
             instagram: String::new(),
             discord_invite: String::new(),
             schedule: "Daily 9 PM – 12 AM".into(),
-            rules: "• எல்லாரையும் respect பண்ணுங்க\n\
-                    • Spam, links, abuse வேண்டாம்\n\
-                    • Other streamers / channels promote பண்ணாதீங்க\n\
-                    • Rules follow பண்ணலனா timeout / ban"
+            rules: "• Respect everyone\n\
+                    • No spam, links or abuse\n\
+                    • Don't promote other channels\n\
+                    • Breaking the rules = timeout or ban"
                 .into(),
-            footer: "வணக்கம் நண்பர்களே! 🙏 {channel} channel-க்கு welcome!\n\
-                     👍 Like பண்ணுங்க, Subscribe பண்ணுங்க, 🔔 Bell icon அழுத்துங்க!\n\n\
+            footer: "Welcome to {channel}! 🙏\n\
+                     👍 Like, Subscribe and hit the 🔔 bell so you never miss a stream!\n\n\
                      📅 Live schedule: {schedule}\n\n\
                      💬 Chat rules:\n{rules}\n\n\
                      🔗 YouTube: {youtube}\n🔗 Twitch: {twitch}\n🔗 Instagram: {instagram}\n🔗 Discord: {discord}\n\n\
@@ -158,7 +158,15 @@ pub struct Store {
     discord_webhook_enc: String,
     /// Twitch token (DPAPI-encrypted JSON).
     twitch_token_enc: String,
+    /// Version of the ready-made texts this store was written with
+    /// (0 = the first, Tamil-language version). Field-level default so a
+    /// file without it reads as 0, not as the struct default.
+    #[serde(default)]
+    text_version: u32,
 }
+
+/// 1 = ready-made texts in English.
+const TEXT_VERSION: u32 = 1;
 
 impl Default for Store {
     fn default() -> Self {
@@ -168,8 +176,52 @@ impl Default for Store {
             active: "bgmi".into(),
             discord_webhook_enc: String::new(),
             twitch_token_enc: String::new(),
+            text_version: TEXT_VERSION,
         }
     }
+}
+
+fn has_tamil(s: &str) -> bool {
+    s.chars().any(|c| ('\u{0B80}'..='\u{0BFF}').contains(&c))
+}
+
+/// Stores from the first version have the Tamil ready-made texts. The user
+/// asked for everything in English, so every text field that still holds
+/// Tamil script is replaced by the English ready-made version. Fields the
+/// user rewrote in English are left alone; stream counts are kept.
+fn upgrade_texts(s: &mut Store) -> bool {
+    if s.text_version >= TEXT_VERSION {
+        return false;
+    }
+    let d = Defaults::default();
+    for (field, english) in [
+        (&mut s.defaults.rules, d.rules),
+        (&mut s.defaults.footer, d.footer),
+    ] {
+        if has_tamil(field) {
+            *field = english;
+        }
+    }
+    let starters = starter_profiles();
+    for p in s.profiles.iter_mut() {
+        let Some(st) = starters.iter().find(|x| x.id == p.id) else {
+            continue;
+        };
+        for (field, english) in [
+            (&mut p.title, &st.title),
+            (&mut p.description, &st.description),
+            (&mut p.announce_text, &st.announce_text),
+            (&mut p.thumb.headline, &st.thumb.headline),
+            (&mut p.thumb.subline, &st.thumb.subline),
+            (&mut p.mode, &st.mode),
+        ] {
+            if has_tamil(field) {
+                *field = english.clone();
+            }
+        }
+    }
+    s.text_version = TEXT_VERSION;
+    true
 }
 
 /// Ready-made profiles for the streams the user said they do.
@@ -188,8 +240,8 @@ pub fn starter_profiles() -> Vec<Profile> {
             kind: "phone".into(),
             game: "BGMI".into(),
             mode: "Rank push".into(),
-            title: "🔴 BGMI Tamil Live | {mode} பண்ணலாம் வாங்க! | Day {n}".into(),
-            description: "🔴 BGMI Tamil live — {mode}! Chat-ல join பண்ணுங்க 🔥".into(),
+            title: "🔴 BGMI Tamil Live | {mode} | Come join! | Day {n}".into(),
+            description: "🔴 BGMI live — {mode}! Join the chat and let's go 🔥".into(),
             tags: "bgmi, bgmi tamil, bgmi live, bgmi tamil live, battlegrounds mobile india".into(),
             hashtags: "#BGMI #BGMITamil".into(),
             banner_label: "BGMI LIVE".into(),
@@ -206,19 +258,19 @@ pub fn starter_profiles() -> Vec<Profile> {
             kind: "rooms".into(),
             game: "BGMI".into(),
             mode: "Custom rooms".into(),
-            title: "🔴 BGMI Custom Rooms Tamil | உங்களோட விளையாடலாம்! | Room details in chat | #{n}".into(),
-            description: "🎮 BGMI custom rooms — subscribers-உடன் விளையாடலாம்!\n\
-                          Room ID & password stream-லயும் chat-லயும் வரும்.\n\n\
-                          📜 Room rules:\n• Hacks / teaming கூடாது\n• Room fill ஆனா next match-ல join பண்ணுங்க\n• Fair play — enjoy பண்ணுங்க!"
+            title: "🔴 BGMI Custom Rooms Tamil | Play with me! | Room details in chat | #{n}".into(),
+            description: "🎮 BGMI custom rooms — play with subscribers!\n\
+                          The room ID & password appear on stream and in chat.\n\n\
+                          📜 Room rules:\n• No hacks or teaming\n• If the room is full, join the next match\n• Play fair and have fun!"
                 .into(),
             tags: "bgmi custom room, bgmi custom room tamil, bgmi tamil, custom room live, bgmi live".into(),
             hashtags: "#BGMI #CustomRoom #BGMITamil".into(),
             banner_label: "CUSTOM ROOMS".into(),
             twitch: TwitchCategory { id: String::new(), name: "Battlegrounds Mobile India".into() },
             twitch_tags: "Tamil, BGMI, CustomRooms, Mobile".into(),
-            thumb: thumb("CUSTOM ROOMS", "உங்களோட விளையாடலாம்!", "#22d3ee", "#7c3aed"),
+            thumb: thumb("CUSTOM ROOMS", "Play with me!", "#22d3ee", "#7c3aed"),
             announce: true,
-            announce_text: "🎮 Custom rooms LIVE: {title}\nRoom details stream-ல வரும்!\n▶ {youtube}".into(),
+            announce_text: "🎮 Custom rooms LIVE: {title}\nRoom details are on the stream!\n▶ {youtube}".into(),
             room_on_banner: true,
             ..Default::default()
         },
@@ -229,7 +281,7 @@ pub fn starter_profiles() -> Vec<Profile> {
             game: "eFootball".into(),
             mode: "Division rivals".into(),
             title: "🔴 eFootball Tamil Live | {mode} ⚽ | Day {n}".into(),
-            description: "⚽ eFootball Tamil live — {mode}! Team, formation பத்தி chat-ல பேசலாம்.".into(),
+            description: "⚽ eFootball live — {mode}! Talk team and formation with me in chat.".into(),
             tags: "efootball, efootball tamil, efootball 2026, efootball live, pes tamil".into(),
             hashtags: "#eFootball #eFootballTamil".into(),
             banner_label: "eFootball".into(),
@@ -247,7 +299,7 @@ pub fn starter_profiles() -> Vec<Profile> {
             game: String::new(),
             mode: String::new(),
             title: "🔴 {game} Tamil Live | Day {n}".into(),
-            description: "🖥️ {game} Tamil live on PC!".into(),
+            description: "🖥️ {game} live on PC!".into(),
             tags: "pc gaming tamil, tamil pc gameplay".into(),
             hashtags: "#PCGaming".into(),
             banner_label: "{game}".into(),
@@ -276,10 +328,16 @@ pub fn thumbnails_dir() -> PathBuf {
 
 impl Store {
     pub fn load() -> Self {
-        std::fs::read(store_path())
+        let Some(mut s) = std::fs::read(store_path())
             .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+            .and_then(|b| serde_json::from_slice::<Store>(&b).ok())
+        else {
+            return Store::default();
+        };
+        if upgrade_texts(&mut s) {
+            s.save().ok();
+        }
+        s
     }
 
     fn save(&self) -> Result<(), String> {
@@ -305,8 +363,6 @@ impl Store {
 
 /// Values filled in at go-live time (game for PC, room details, …).
 pub type Vars = HashMap<String, String>;
-
-const TAMIL_DAYS: [&str; 7] = ["ஞாயிறு", "திங்கள்", "செவ்வாய்", "புதன்", "வியாழன்", "வெள்ளி", "சனி"];
 
 /// Replaces `{name}` with its value; unknown names are left as they are so
 /// a typo is visible in the preview instead of silently vanishing.
@@ -372,7 +428,6 @@ fn variables(
     extra: &Vars,
     now: chrono::DateTime<chrono::Local>,
 ) -> Vars {
-    use chrono::Datelike;
     let mut v = Vars::new();
     let put = |v: &mut Vars, k: &str, s: &str| {
         v.insert(k.into(), s.to_string());
@@ -382,11 +437,7 @@ fn variables(
     put(&mut v, "mode", &p.mode);
     put(&mut v, "n", &(p.count + 1).to_string());
     put(&mut v, "date", &now.format("%-d %b").to_string());
-    put(
-        &mut v,
-        "day",
-        TAMIL_DAYS[now.weekday().num_days_from_sunday() as usize],
-    );
+    put(&mut v, "day", &now.format("%A").to_string());
     put(&mut v, "time", &now.format("%-I:%M %p").to_string());
     put(&mut v, "schedule", &d.schedule);
     put(&mut v, "rules", &d.rules);
@@ -1397,6 +1448,64 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r["banner"]["room"], "Room ID: 1234567 · Pass: 99");
+    }
+
+    #[test]
+    fn ready_made_texts_are_english() {
+        let d = Defaults::default();
+        assert!(!has_tamil(&d.rules) && !has_tamil(&d.footer));
+        for p in starter_profiles() {
+            for f in [
+                &p.title,
+                &p.description,
+                &p.announce_text,
+                &p.thumb.headline,
+                &p.thumb.subline,
+                &p.mode,
+            ] {
+                assert!(!has_tamil(f), "{}: {f}", p.id);
+            }
+        }
+        let r = render(&Store::default(), "bgmi", &Vars::new()).unwrap();
+        let day = r["youtube"]["title"].as_str().unwrap();
+        assert!(!has_tamil(day));
+    }
+
+    #[test]
+    fn old_tamil_store_is_upgraded_but_user_edits_survive() {
+        // A store saved by the first version: Tamil texts, no text_version.
+        let old = json!({
+            "defaults": { "channel": "Phantom Blitz", "rules": "• எல்லாரையும் respect பண்ணுங்க", "footer": "வணக்கம்! {channel}" },
+            "profiles": [
+                { "id": "bgmi", "name": "BGMI", "kind": "phone", "title": "🔴 BGMI Tamil Live | {mode} பண்ணலாம் வாங்க! | Day {n}",
+                  "description": "My own English description", "count": 7,
+                  "thumb": { "headline": "BGMI LIVE", "subline": "{mode} 🔥" } },
+                { "id": "rooms", "name": "Rooms", "kind": "rooms", "title": "x", "thumb": { "subline": "உங்களோட விளையாடலாம்!" } },
+                { "id": "mine", "name": "Mine", "kind": "phone", "title": "என் title" }
+            ],
+            "active": "bgmi"
+        });
+        let mut s: Store = serde_json::from_value(old).unwrap();
+        assert_eq!(
+            s.text_version, 0,
+            "missing field must read as the old version"
+        );
+        assert!(upgrade_texts(&mut s));
+        assert!(!has_tamil(&s.defaults.rules) && !has_tamil(&s.defaults.footer));
+        assert_eq!(s.defaults.channel, "Phantom Blitz");
+        let bgmi = &s.profiles[0];
+        assert!(!has_tamil(&bgmi.title));
+        assert_eq!(
+            bgmi.description, "My own English description",
+            "user's English edit kept"
+        );
+        assert_eq!(bgmi.count, 7, "stream count kept");
+        assert_eq!(s.profiles[1].thumb.subline, "Play with me!");
+        assert_eq!(
+            s.profiles[2].title, "என் title",
+            "user's own profile is never touched"
+        );
+        assert!(!upgrade_texts(&mut s), "runs once");
     }
 
     #[test]
