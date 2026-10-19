@@ -239,6 +239,12 @@ impl Mixer {
     /// the PC's grid, ~330 ms ahead of the phone's, so the stream's audio
     /// jumped forward and back and broke up (voice included). Only a real
     /// stop of the phone's audio (over 1 s) switches to the stand-in now.
+    /// The phone went away: the PC clock takes the sound over at once
+    /// (waiting out the timeout left a ~1 s hole in the stream's audio).
+    pub fn game_audio_gone(&self) {
+        self.state.lock().unwrap().last_game_audio = None;
+    }
+
     pub fn mix_without_game(&self) -> Option<Vec<u8>> {
         let mut s = self.state.lock().unwrap();
         if s.last_game_audio

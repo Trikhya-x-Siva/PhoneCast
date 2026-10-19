@@ -245,7 +245,7 @@
     g.restore();
   }
 
-  function drawBlitz(g, W, H, s, t, popup) {
+  function drawBlitz(g, W, H, s, t, popup, kind) {
     const c1 = s.color, c2 = s.color2;
     const bg = g.createLinearGradient(0, 0, W, 0);
     bg.addColorStop(0, "#070a14");
@@ -320,7 +320,10 @@
     g.fillStyle = "#b8c0dc";
     g.fillText(s.line || "@yourhandle · Subscribe", x, H * 0.83);
 
-    if (popup > 0) subscribePopup(g, W, H, s, popup);
+    if (popup > 0) {
+      if (!kind || kind === "subscribe") subscribePopup(g, W, H, s, popup);
+      else pillPopup(g, W, H, s, popup, MOMENTS[kind](s));
+    }
     if (s.right && !(popup > 0.1 && popup < 0.9)) {
       g.font = `italic 900 ${Math.round(H * 0.2)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
       const tw = g.measureText(s.right).width;
@@ -523,7 +526,7 @@
     }
   }
 
-  function draw(g, W, H, s, t, popup) {
+  function draw(g, W, H, s, t, popup, kind) {
     g.save();
     g.clearRect(0, 0, W, H);
     g.textBaseline = "alphabetic";
@@ -534,7 +537,7 @@
     } else if (s.style === "clean") {
       drawClean(g, W, H, s);
     } else {
-      drawBlitz(g, W, H, s, t, popup || 0);
+      drawBlitz(g, W, H, s, t, popup || 0, kind);
     }
     g.restore();
   }
@@ -670,8 +673,59 @@
   /** Banner frame at second `sec` of the 20 s loop. */
   function bannerAt(g, W, H, s, sec) {
     const t = (sec % LOOP_SECONDS) / LOOP_SECONDS;
-    const p = sec >= POPUP_FROM ? (sec - POPUP_FROM) / (BANNER_LOOP_SECONDS - POPUP_FROM) : 0;
+    // With app pop-ups on, the loop itself stays clean (they are laid in).
+    const p = s.popups && s.popups.on ? 0 : sec >= POPUP_FROM ? (sec - POPUP_FROM) / (BANNER_LOOP_SECONDS - POPUP_FROM) : 0;
     draw(g, W, H, s, t, p);
+  }
+
+  // Pop-ups ("moments"): 5 s each, laid over the banner loop by the app.
+  const MOMENT_SECONDS = 5;
+  const MOMENTS = {
+    like: () => ({ icon: "👍", text: "Enjoying it? Hit LIKE", color: "#2563eb" }),
+    follow: (s) => ({ icon: "📸", text: `Follow ${s.social || ""}`.trim(), color: "#d62976" }),
+    discord: (s) => ({ icon: "💬", text: `Join the squad · ${s.discord || ""}`, color: "#5865f2" }),
+    custom: (s) => ({ icon: "📣", text: s.custom || "", color: s.color }),
+  };
+  /** Which pop-ups can be shown with these settings. */
+  function momentNames(s) {
+    const on = (s.popups && s.popups.list) || {};
+    return ["subscribe", "like", "follow", "discord", "custom"].filter((n) =>
+      on[n] && (n === "follow" ? !!s.social : n === "discord" ? !!s.discord : n === "custom" ? !!s.custom : true));
+  }
+  /** Banner frame `sec` of the loop with pop-up `name` at `k` (0..1) of its 5 s. */
+  function momentAt(g, W, H, s, name, sec, k) {
+    const t = (sec % LOOP_SECONDS) / LOOP_SECONDS;
+    draw(g, W, H, s, t, Math.max(0.0001, k), name);
+  }
+  // A coloured pill that slides in from the right over the game label.
+  function pillPopup(g, W, H, s, p, m) {
+    const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+    const k = p < 0.82 ? ease(p / 0.18) : 1 - ease((p - 0.82) / 0.18);
+    if (k <= 0 || !m.text) return;
+    const pad = Math.round(H * 0.12);
+    const bh = H * 0.5;
+    g.save();
+    g.font = `italic 900 ${Math.round(bh * 0.4)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+    const tw = Math.min(g.measureText(m.text).width, W * 0.42);
+    const bw = tw + bh * 1.6;
+    const x = W - pad * 1.6 - bw + (1 - k) * (bw + pad * 2), y = H / 2 - bh / 2 + 3;
+    g.globalAlpha = k;
+    g.shadowColor = m.color;
+    g.shadowBlur = bh * 0.36;
+    g.fillStyle = m.color;
+    g.beginPath();
+    g.roundRect(x, y, bw, bh, bh * 0.22);
+    g.fill();
+    g.shadowBlur = 0;
+    // A little bounce on the icon while it is held.
+    const bounce = p > 0.15 && p < 0.85 ? Math.abs(Math.sin(p * Math.PI * 6)) * bh * 0.08 : 0;
+    g.font = `${Math.round(bh * 0.5)}px "Segoe UI Emoji", "Segoe UI", sans-serif`;
+    g.textBaseline = "middle";
+    g.fillText(m.icon, x + bh * 0.3, y + bh / 2 - bounce);
+    g.fillStyle = "#fff";
+    g.font = `italic 900 ${Math.round(bh * 0.4)}px "Segoe UI Black", "Segoe UI", system-ui, sans-serif`;
+    g.fillText(m.text, x + bh * 1.15, y + bh / 2 + 1, tw);
+    g.restore();
   }
 
   // "Banner off": a quiet strip with just a thin accent line and the logo
@@ -699,5 +753,5 @@
     g.restore();
   }
 
-  window.BannerArt = { draw, bannerAt, plain, scene, stinger, animated, LOOP_SECONDS, BANNER_LOOP_SECONDS, FPS, SCENE_SECONDS: 4, STINGER_SECONDS, STINGER_HOLD_AT };
+  window.BannerArt = { draw, bannerAt, plain, momentAt, momentNames, MOMENT_SECONDS, scene, stinger, animated, LOOP_SECONDS, BANNER_LOOP_SECONDS, FPS, SCENE_SECONDS: 4, STINGER_SECONDS, STINGER_HOLD_AT };
 })();

@@ -49,6 +49,7 @@ const STATS: u8 = 0x05;
 const PONG: u8 = 0x06;
 const MIC_PCM: u8 = 0x07;
 const FOREGROUND_APP: u8 = 0x08;
+const PHONE_COMMAND: u8 = 0x09;
 // PC -> phone
 const SET_BITRATE: u8 = 0x81;
 const REQUEST_KEYFRAME: u8 = 0x82;
@@ -163,6 +164,8 @@ pub struct Core {
     auto_brb: AtomicBool,
     /// The scene design the window last used (for scenes the app switches).
     last_design: Mutex<String>,
+    /// The status last sent to the window (for the test rig).
+    last_status: Mutex<Value>,
 }
 
 impl Core {
@@ -208,6 +211,7 @@ impl Core {
             phone_app: Mutex::new(None),
             auto_brb: AtomicBool::new(false),
             last_design: Mutex::new(String::new()),
+            last_status: Mutex::new(Value::Null),
         });
         // A previous run may have left the phone in 16:9 (crash, power cut).
         let gm = core.gamemode.clone();
@@ -816,6 +820,7 @@ impl Core {
                 i.fps = 0;
                 i.mbps = 0.0;
             }
+            self.mixer.game_audio_gone();
             // Live: keep the broadcast going on Be right back (the scene clock
             // sends it) until the phone and the game are back.
             self.auto_cover("the phone disconnected");
@@ -952,6 +957,20 @@ impl Core {
                 self.inner.lock().unwrap().audio = Some((rate, payload[4]));
             }
             MIC_PCM => self.mixer.push_phone_mic(&payload),
+            PHONE_COMMAND => {
+                let cmd = String::from_utf8_lossy(&payload).to_string();
+                diag::log("phone", format!("notification button: {cmd}"));
+                let r = match cmd.as_str() {
+                    "brb" => self.test_scene(Some("brb")),
+                    "game" => self.test_scene(None),
+                    // The window saves it (same path as its Clip button).
+                    "clip" => self.app.emit("phone-clip", 30).map_err(|e| e.to_string()),
+                    _ => Ok(()),
+                };
+                if let Err(e) = r {
+                    diag::log("phone", format!("{cmd}: {e}"));
+                }
+            }
             FOREGROUND_APP => {
                 if let Ok(v) = serde_json::from_slice::<Value>(&payload) {
                     self.on_phone_app(v);
@@ -1403,11 +1422,14 @@ impl Core {
             let privacy_on = self.prefs.lock().unwrap().privacy_cover;
             let on_screen = self.phone_app.lock().unwrap().clone();
             status["bannerOn"] = json!(crate::banner_feed::is_on());
+            let (playing, waiting) = crate::banner_feed::moment_status();
+            status["bannerMoment"] = json!({ "playing": playing, "waiting": waiting });
             status["privacy"] = json!({
                 "on": privacy_on,
                 "app": on_screen,
                 "auto": self.auto_brb.load(Ordering::SeqCst),
             });
+            *self.last_status.lock().unwrap() = status.clone();
             app.emit("status", status).ok();
         }
     }
@@ -1797,6 +1819,24 @@ impl Core {
         }
     }
 
+    /// The latest status (as the window sees it), plus the live outputs.
+    pub fn status_now(&self) -> Value {
+        let mut v = self.last_status.lock().unwrap().clone();
+        v["outputsRunning"] = json!(self.has_outputs_running());
+        v
+    }
+
+    /// Test rig: is some version of this scene ready for the current picture?
+    pub fn test_ready(&self, name: &str) -> bool {
+        self.scene_ready(name, &self.ready_design(name))
+    }
+
+    /// Test rig: a scene (or back to the game) with whichever version is ready.
+    pub fn test_scene(&self, name: Option<&str>) -> Result<(), String> {
+        let design = self.ready_design(name.unwrap_or("stinger"));
+        self.user_set_scene(name, &design)
+    }
+
     /// A scene the user picked: the privacy cover no longer owns it.
     pub fn user_set_scene(&self, name: Option<&str>, design: &str) -> Result<(), String> {
         self.auto_brb.store(false, Ordering::SeqCst);
@@ -2040,6 +2080,10 @@ impl Core {
 }
 
 pub fn recordings_dir() -> PathBuf {
+    // The stress test records into its own folder.
+    if let Ok(d) = std::env::var("PHONECAST_RECORDINGS") {
+        return PathBuf::from(d);
+    }
     let base = std::env::var("USERPROFILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."));

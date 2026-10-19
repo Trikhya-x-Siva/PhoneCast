@@ -27,6 +27,7 @@ u8 type | u8 flags | i64 ptsUs | u32 len | payload[len]
 | 0x05 | STATS | UTF-8 JSON (battery, temperature, thermal status, fps, bitrate…) |
 | 0x06 | PONG | i64 pcTimeUs (echoed) · i64 phoneTimeUs |
 | 0x07 | MIC_PCM | phone mic PCM (48 kHz s16le mono) |
+| 0x09 | PHONE_COMMAND | UTF-8 `brb`, `game` or `clip` (notification buttons) |
 | 0x08 | FOREGROUND_APP | UTF-8 JSON `{pkg, label, game}`: the app now on screen (privacy cover) |
 
 ### PC → phone

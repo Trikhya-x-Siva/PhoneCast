@@ -316,10 +316,12 @@
 
   // The banner design, for scenes drawn in the same style.
   window.getBannerSpec = () => bn;
+  // For the main screen's "what viewers see" strip.
+  Object.defineProperty(window, "currentFraming", { get: () => framing, configurable: true });
   window.bannerDesignKey = () => {
     const v = bn.assetVer || {};
     const sig = (k) => (bn[k] ? "v" + (v[k] || 0) : "");
-    const str = JSON.stringify([bn.style, bn.title, bn.line, bn.right, bn.color, bn.color2, sig("logo"), sig("image"), sig("sceneBg"), sig("stripBg"), sig("poseWave"), sig("poseShush")]);
+    const str = JSON.stringify([bn.style, bn.title, bn.line, bn.right, bn.color, bn.color2, sig("logo"), sig("image"), sig("sceneBg"), sig("stripBg"), sig("poseWave"), sig("poseShush"), bn.social, bn.discord, bn.custom, bn.popups]);
     let h = 2166136261;
     for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 16777619);
     return (h >>> 0).toString(36);
@@ -349,7 +351,7 @@
     off.height = H;
     const g = off.getContext("2d");
     // Pictures are files of their own; the settings only say which exist.
-    const spec = { style: bn.style, title: bn.title, line: bn.line, right: bn.right, color: bn.color, color2: bn.color2, assetVer: bn.assetVer || {}, savedKey: key };
+    const spec = { style: bn.style, title: bn.title, line: bn.line, right: bn.right, color: bn.color, color2: bn.color2, assetVer: bn.assetVer || {}, savedKey: key, social: bn.social || "", discord: bn.discord || "", custom: bn.custom || "", popups: bn.popups };
     for (const k of ASSETS) spec[k] = bn[k] ? "asset" : null;
     BannerArt.draw(g, off.width, H, bn, 0);
     const first = await toPng(off);
@@ -378,6 +380,30 @@
     pg.clearRect(0, 0, off.width, H);
     BannerArt.plain(pg, off.width, H, bn);
     await invoke("save_banner_plain", await toPng(off));
+    // Pop-ups: each as four 5 s pieces of the loop (at 0, 5, 10, 15 s), so
+    // the app can lay one in at the next of those points, seamlessly.
+    const per = BannerArt.MOMENT_SECONDS * BannerArt.FPS;
+    for (const name of BannerArt.momentNames(bn)) {
+      $("qbState").textContent = `Making the ${name} pop-up…`;
+      for (let at = 0; at < BannerArt.BANNER_LOOP_SECONDS * BannerArt.FPS; at += per) {
+        const parts = [];
+        for (let i = 0; i < per; i++) {
+          BannerArt.momentAt(g, off.width, H, bn, name, (at + i) / BannerArt.FPS, i / per);
+          parts.push(await toJpeg(off));
+          if (i % 6 === 5) await new Promise((r) => setTimeout(r, 0));
+        }
+        const all = new Uint8Array(parts.reduce((a, f) => a + f.length, 0));
+        let o = 0;
+        for (const f of parts) {
+          all.set(f, o);
+          o += f.length;
+        }
+        await invoke("save_banner_moment", all, {
+          headers: { "x-name": name, "x-at": String(at), "x-sizes": parts.map((f) => f.length).join(","), "x-w": String(off.width), "x-h": String(H) },
+        });
+      }
+    }
+    sendPopupPlan();
     savedKey = key;
     if ($("qbState")) $("qbState").textContent = "";
   }
@@ -418,9 +444,115 @@
     invoke("set_banner_on", { on: e.target.checked }).catch((err) => toast(String(err)));
   });
   $("qbEdit").addEventListener("click", () => window.openModal());
+  // ---------------- banner pop-ups ----------------
+  bn.popups = bn.popups || { on: true, every: 180, list: { subscribe: true, like: true, follow: false, discord: false, custom: false } };
+  const POPUPS = [
+    ["subscribe", "Subscribe", null],
+    ["like", "Like reminder", null],
+    ["follow", "Follow me", ["social", "@phantom.blitzz on Instagram"]],
+    ["discord", "Join Discord", ["discord", "discord.gg/yourserver"]],
+    ["custom", "Your message", ["custom", "Squad games at 9 pm!"]],
+  ];
+  function sendPopupPlan() {
+    invoke("set_banner_moments", { auto: !!bn.popups.on, every: Number(bn.popups.every) || 180, names: BannerArt.momentNames(bn) }).catch(() => {});
+  }
+  function popupsChanged() {
+    sendPopupPlan();
+    $("qbState").textContent = "Updating the banner…";
+    saveBannerSoon();
+  }
+  function renderPopups() {
+    const box = $("qbPopups");
+    if (!box) return;
+    box.innerHTML = "";
+    $("qbAuto").checked = !!bn.popups.on;
+    $("qbEvery").value = String(bn.popups.every || 180);
+    for (const [id, label, field] of POPUPS) {
+      const row = document.createElement("div");
+      row.className = "popup-row";
+      const sw = document.createElement("label");
+      sw.className = "switch";
+      sw.innerHTML = `<input type="checkbox"${bn.popups.list[id] ? " checked" : ""}><span class="track"><span class="knob"></span></span>${label}`;
+      sw.querySelector("input").onchange = (e) => {
+        bn.popups.list[id] = e.target.checked;
+        popupsChanged();
+        renderPopups();
+      };
+      const show = document.createElement("button");
+      show.className = "btn ghost small";
+      show.textContent = "Show now";
+      show.disabled = !bn.popups.list[id];
+      show.onclick = async () => {
+        try {
+          await invoke("show_banner_moment", { name: id });
+          toast(`${label}: on stream within 5 s`);
+        } catch (e) {
+          toast(String(e));
+        }
+      };
+      row.append(sw, show);
+      box.appendChild(row);
+      if (field && bn.popups.list[id]) {
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.maxLength = 48;
+        inp.placeholder = field[1];
+        inp.value = bn[field[0]] || "";
+        inp.className = "popup-text";
+        inp.oninput = () => {
+          bn[field[0]] = inp.value.trim();
+          popupsChanged();
+        };
+        box.appendChild(inp);
+      }
+    }
+  }
+  $("qbAuto").onchange = (e) => {
+    bn.popups.on = e.target.checked;
+    popupsChanged();
+  };
+  $("qbEvery").onchange = (e) => {
+    bn.popups.every = Number(e.target.value);
+    sendPopupPlan();
+    saveBannerSoon();
+  };
+
+  // One-tap game labels: the usual ones plus the game open on the phone.
+  const LABELS = ["BGMI LIVE", "eFootball", "Free Fire", "COD Mobile", "Just chatting"];
+  let chipsKey = "";
+  function setLabel(v) {
+    bn.right = v;
+    $("qbRight").value = v;
+    $("bnRight").value = v;
+    $("qbState").textContent = "Updating the banner…";
+    saveBannerSoon();
+    renderChips(window.lastStatus || {});
+  }
+  function renderChips(s) {
+    const app = s.privacy && s.privacy.app;
+    const phoneGame = app && app.game && app.label ? app.label : null;
+    const list = [...new Set([...(phoneGame ? [phoneGame] : []), ...LABELS])];
+    const key = list.join("|") + "#" + bn.right;
+    if (key === chipsKey) return;
+    chipsKey = key;
+    const box = $("qbChips");
+    box.innerHTML = "";
+    for (const v of list) {
+      const b = document.createElement("button");
+      b.className = "chip" + (v === bn.right ? " on" : "") + (v === phoneGame ? " phone" : "");
+      b.textContent = v === phoneGame ? `On phone: ${v}` : v;
+      b.title = v === phoneGame ? "The game open on your phone" : "";
+      b.onclick = () => setLabel(v);
+      box.appendChild(b);
+    }
+  }
   window.renderQuickBanner = (s) => {
+    const m = s.bannerMoment || {};
+    const live = m.playing ? `On stream now: ${m.playing}` : m.waiting ? `Coming up within 5 s: ${m.waiting}` : "";
+    if ($("qbNow").textContent !== live) $("qbNow").textContent = live;
     const t = $("qbOn");
     if (document.activeElement !== t && typeof s.bannerOn === "boolean") t.checked = s.bannerOn;
+    renderChips(s);
   };
   for (const [id, key] of [["bnLogo", "logo"], ["bnImage", "image"]]) {
     $(id).addEventListener("change", (e) => {
@@ -461,7 +593,13 @@
     // Scenes whose character comes from the channel's own clip (laid over
     // by the app), so the drawn scene leaves room for it.
     bn._clips = s._clips || [];
+    bn.social = s.social || "";
+    bn.discord = s.discord || "";
+    bn.custom = s.custom || "";
+    if (s.popups) bn.popups = s.popups;
     window.bannerReady = true;
+    renderPopups();
+    sendPopupPlan();
     syncQuickBanner();
     $("bnTitle").value = bn.title;
     $("bnLine").value = bn.line;
@@ -526,13 +664,56 @@
   };
   $("liveEdit").onclick = () => window.openModal();
   $("liveSetup").onclick = () => openSetup();
+  // Ending is the one live action that cannot be undone: ask first, and
+  // offer the clean way out (the Thanks scene, then the end).
+  const endModal = $("endModal");
+  let endTimer = null;
+  async function endNow() {
+    clearInterval(endTimer);
+    endTimer = null;
+    window.setAlert("ending", null);
+    await invoke("stop_live");
+    // The next stream starts on the game, not on the Thanks scene.
+    invoke("set_scene", { name: null, design: window.bannerDesignKey() }).catch(() => {});
+    toast("Stream ended");
+  }
   $("liveBtn").onclick = async () => {
     if (isLive) {
-      await invoke("stop_live");
-      toast("Stream ended");
+      const l = (window.lastStatus && window.lastStatus.live) || {};
+      const names = (l.destinations || []).map((d) => d.name).join(" + ") || "every platform";
+      $("endSub").textContent = `Ends it on ${names}${l.seconds ? ` after ${fmtTime(l.seconds)} live` : ""}.`;
+      endModal.classList.remove("hidden");
     } else {
       window.openModal();
     }
+  };
+  endModal.addEventListener("click", (e) => {
+    if (e.target === endModal || e.target.closest("[data-close]")) endModal.classList.add("hidden");
+  });
+  $("endNow").onclick = () => {
+    endModal.classList.add("hidden");
+    endNow().catch((e) => toast(String(e)));
+  };
+  $("endThanks").onclick = async () => {
+    endModal.classList.add("hidden");
+    try {
+      await window.showScene("thanks");
+    } catch (e) {
+      toast(String(e.message || e));
+    }
+    let left = 15;
+    const tick = () => {
+      window.setAlert("ending", { level: "info", text: `Thanks for watching is on. Ending the stream in ${left} s.`, action: "Keep streaming", onAction: () => {
+        clearInterval(endTimer);
+        endTimer = null;
+        window.setAlert("ending", null);
+        toast("Still live");
+      } });
+      if (left-- <= 0) endNow().catch((e) => toast(String(e)));
+    };
+    clearInterval(endTimer);
+    tick();
+    endTimer = setInterval(tick, 1000);
   };
 
   // ---------------- setup check (first run, re-runnable) ----------------
@@ -667,6 +848,7 @@
   invoke("get_live_settings")
     .then((s) => {
       settings = s;
+      framing = s.framing || framing;
       if (!s.setupDone) setTimeout(openSetup, 600);
     })
     .catch(() => {});

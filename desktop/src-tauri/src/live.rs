@@ -483,8 +483,11 @@ fn fifo_output_args(container: &str, url: &str) -> Vec<String> {
         "1",
         "-drop_pkts_on_overflow",
         "1",
+        // ~5 s of packets: a short upload stall is absorbed instead of
+        // overflowing and dropping everything up to the next keyframe (2 s
+        // of picture lost; the local stress test showed it at 1 s).
         "-queue_size",
-        "120",
+        "600",
         url,
     ]
     .iter()
@@ -1011,7 +1014,13 @@ fn banner_input() -> Vec<String> {
     // Live-switchable: the app writes the banner (or the plain strip) into
     // a local socket, so on/off and edits apply without a restart.
     if let Some(port) = crate::banner_feed::start() {
+        // No probing: the feed is paced in real time, so FFmpeg's default
+        // probe (5 s of input) held the whole stream start back ~5-12 s.
         return [
+            "-probesize",
+            "32768",
+            "-analyzeduration",
+            "0",
             "-f",
             "h264",
             "-framerate",
@@ -1570,6 +1579,7 @@ fn watch_progress(
         let mut last_frame = 0u64;
         let mut first_frame: Option<Instant> = None;
         let mut last_error: Option<Instant> = None;
+        let mut last_warn: Option<Instant> = None;
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             let line = line.trim();
             match classify(line) {
@@ -1617,6 +1627,14 @@ fn watch_progress(
                         s.since = None;
                     }
                 }
+                Line::Warning(msg) => {
+                    // Throttled: these can repeat every frame.
+                    if last_warn.is_none_or(|t: Instant| t.elapsed() > Duration::from_secs(5)) {
+                        last_warn = Some(Instant::now());
+                        let s = status.lock().unwrap();
+                        crate::diag::log("live", format!("{}: ffmpeg warning: {msg}", s.name));
+                    }
+                }
                 Line::Other => {}
             }
         }
@@ -1637,6 +1655,8 @@ enum Line<'a> {
     Progress(&'a str, &'a str),
     Recovered,
     Error(&'a str),
+    /// A warning worth keeping in the log (lost or late frames).
+    Warning(&'a str),
     Other,
 }
 
@@ -1652,6 +1672,24 @@ fn classify(line: &str) -> Line<'_> {
     }
     if line.contains("Recovery successful") {
         return Line::Recovered;
+    }
+    if let Some(i) = line.find("[warning] ") {
+        let msg = line[i + 10..].trim();
+        let low = msg.to_lowercase();
+        if [
+            "queue full",
+            "drop",
+            "monoton",
+            "past duration",
+            "late",
+            "overflow",
+            "discard",
+        ]
+        .iter()
+        .any(|k| low.contains(k))
+        {
+            return Line::Warning(msg);
+        }
     }
     if ["[info]", "[warning]", "[verbose]", "[debug]"]
         .iter()
@@ -1850,7 +1888,7 @@ mod tests {
         assert_eq!(classify("[info]   Stream #0:0: Video: h264"), Line::Other);
         assert_eq!(
             classify("[fifo @ 01] [warning] FIFO queue full"),
-            Line::Other
+            Line::Warning("FIFO queue full")
         );
         assert_eq!(
             classify("[fifo @ 01] [info] Recovery failed: x"),
@@ -1908,7 +1946,7 @@ mod tests {
             "-max_recovery_attempts 0",
             "-restart_with_keyframe 1",
             "-drop_pkts_on_overflow 1",
-            "-queue_size 120",
+            "-queue_size 600",
         ] {
             assert!(out.contains(want), "missing {want}");
         }

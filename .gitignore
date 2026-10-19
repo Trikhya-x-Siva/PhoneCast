@@ -30,3 +30,5 @@ live.json
 *.iml
 .DS_Store
 Thumbs.db
+
+desktop/ai-helper-target/

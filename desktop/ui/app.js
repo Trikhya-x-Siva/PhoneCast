@@ -266,7 +266,10 @@ function render(s) {
   $("screen").classList.toggle("recording", recording);
   $("recBadge").classList.toggle("hidden", !recording);
   if (recording) $("recTime").textContent = fmtTime(s.recording.seconds);
-  if (s.recordError) toast(`Recording problem: ${s.recordError}`);
+  renderAlerts(s);
+  renderProgram(s);
+  renderStatusBar(s);
+  drawSceneThumbs();
 
   if (s.mixer) renderMixer(s.mixer);
   renderLive(s.live);
@@ -682,7 +685,9 @@ function destIcon(name) {
 const STATE_TEXT = { live: "Live", connecting: "Connecting", reconnecting: "Reconnecting", error: "Error", stopped: "Stopped" };
 
 function renderLive(l) {
+  const was = isLive;
   isLive = !!(l && l.active);
+  if (isLive && !was && window.setSideTab) window.setSideTab("live");
   const btn = $("liveBtn");
   btn.classList.toggle("on", isLive);
   $("liveText").textContent = isLive ? `End stream · ${fmtTime(l.seconds)}` : "Go live";
@@ -743,6 +748,181 @@ function fmtTime(sec) {
 }
 
 let toastTimer;
+// ---------------- alert bar ----------------
+// Anything that affects viewers stays on screen until it is resolved
+// (toasts are only for confirmations like "Clip saved").
+const alerts = new Map();
+window.setAlert = (id, a) => {
+  if (a) alerts.set(id, a);
+  else alerts.delete(id);
+  drawAlerts();
+};
+let alertsKey = "";
+function drawAlerts() {
+  const list = [...alerts.entries()];
+  const key = JSON.stringify(list.map(([id, a]) => [id, a.level, a.text, a.action]));
+  if (key === alertsKey) return;
+  alertsKey = key;
+  const box = $("alerts");
+  box.innerHTML = "";
+  for (const [, a] of list) {
+    const el = document.createElement("div");
+    el.className = `alert ${a.level}`;
+    const t = document.createElement("span");
+    t.textContent = a.text;
+    el.appendChild(t);
+    if (a.action) {
+      const b = document.createElement("button");
+      b.className = "btn ghost small";
+      b.textContent = a.action;
+      b.onclick = a.onAction;
+      el.appendChild(b);
+    }
+    box.appendChild(el);
+  }
+}
+function renderAlerts(s) {
+  const live = !!(s.live && s.live.active);
+  const set = (id, cond, a) => window.setAlert(id, cond ? a : null);
+  for (const d of (s.live && s.live.destinations) || []) {
+    set(`rc-${d.name}`, live && d.state === "reconnecting", { level: "warn", text: `${d.name}: connection dropped, reconnecting by itself. Viewers see a short pause.` });
+  }
+  set("phoneGone", live && !s.connected && !s.pcMode, { level: "bad", text: "Phone disconnected. Viewers see Be right back until it is back (plug in the USB cable or open OSSG on the phone)." });
+  const p = s.privacy || {};
+  set("cover", live && p.auto && s.scene === "brb", { level: "info", text: "Be right back is on by itself (you left the game). It goes back to the game when you return to it." });
+  set("rec", !!s.recordError, { level: "bad", text: `Recording problem: ${s.recordError}` });
+  const ph = s.phone || {};
+  set("hot", !!ph.heatLimited, { level: "warn", text: "The phone is hot: OSSG lowered its quality until it cools down." });
+}
+
+// ---------------- side panel: Live / Setup ----------------
+// Live = what you touch mid-stream; Setup = everything else. Going live
+// switches to Live.
+(function sideTabs() {
+  const aside = document.querySelector("aside");
+  if (!aside) return;
+  const LIVE = ["Scenes", "Banner", "Clips", "Live"];
+  const bar = document.createElement("div");
+  bar.className = "side-tabs";
+  bar.setAttribute("role", "tablist");
+  bar.innerHTML = '<button role="tab" data-tab="live">Live controls</button><button role="tab" data-tab="setup">Setup</button>';
+  aside.prepend(bar);
+  for (const c of aside.querySelectorAll(":scope > .card")) {
+    const h = c.querySelector("h3");
+    c.dataset.tab = h && LIVE.includes(h.textContent.trim()) ? "live" : "setup";
+  }
+  window.setSideTab = (t) => {
+    aside.dataset.tab = t;
+    for (const b of bar.children) b.classList.toggle("on", b.dataset.tab === t);
+    try { localStorage.setItem("ossg.tab", t); } catch {}
+  };
+  bar.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (b) window.setSideTab(b.dataset.tab);
+  });
+  let saved = null;
+  try { saved = localStorage.getItem("ossg.tab"); } catch {}
+  window.setSideTab(saved || "live");
+})();
+
+// Long help text folds to two lines; a click opens it.
+document.addEventListener("click", (e) => {
+  const h = e.target.closest(".hint");
+  if (h && !e.target.closest("a,button,input,select")) h.classList.toggle("open");
+});
+
+// ---------------- what viewers see ----------------
+const SCENE_NAMES = { starting: "Starting soon", brb: "Be right back", thanks: "Thanks for watching", stinger: "Back to game (action clip)" };
+function renderProgram(s) {
+  const scene = s.scene;
+  $("sceneCover").classList.toggle("hidden", !scene);
+  if (scene) $("sceneCoverName").textContent = SCENE_NAMES[scene] || scene;
+  const banner = window.currentFraming === "banner" || window.currentFraming === "vertical";
+  $("program").classList.toggle("hidden", !banner);
+  $("program").classList.toggle("off", s.bannerOn === false);
+  $("programTag").textContent = s.bannerOn === false ? "Banner off: viewers see a plain strip" : "On stream under the game";
+}
+let programLast = 0;
+let programMoment = { name: null, since: 0 };
+function programLoop(now) {
+  requestAnimationFrame(programLoop);
+  const box = $("program");
+  if (document.hidden || box.classList.contains("hidden") || now - programLast < 66) return; // ~15 fps
+  if (!window.BannerArt || !window.getBannerSpec || !window.bannerReady) return;
+  programLast = now;
+  const c = $("programStrip");
+  const w = Math.round(c.clientWidth * devicePixelRatio);
+  const h = Math.round((w * 208) / 1920);
+  if (c.width !== w || c.height !== h) {
+    c.width = w;
+    c.height = h;
+  }
+  const g = c.getContext("2d");
+  const spec = window.getBannerSpec();
+  const m = window.lastStatus && window.lastStatus.bannerMoment;
+  const playing = m && m.playing;
+  if (playing !== programMoment.name) programMoment = { name: playing, since: now };
+  const sec = (now / 1000) % BannerArt.BANNER_LOOP_SECONDS;
+  if (box.classList.contains("off")) BannerArt.plain(g, w, h, spec);
+  else if (playing) BannerArt.momentAt(g, w, h, spec, playing, sec, Math.min(1, (now - programMoment.since) / (BannerArt.MOMENT_SECONDS * 1000)));
+  else BannerArt.bannerAt(g, w, h, spec, sec);
+}
+requestAnimationFrame(programLoop);
+
+// Scene tiles get a small picture of the scene.
+let thumbsKey = "";
+function drawSceneThumbs() {
+  if (!window.BannerArt || !window.bannerReady) return;
+  const key = window.bannerDesignKey();
+  if (key === thumbsKey) return;
+  thumbsKey = key;
+  const spec = window.getBannerSpec();
+  for (const b of document.querySelectorAll(".scene[data-scene]")) {
+    const name = b.dataset.scene;
+    let c = b.querySelector("canvas.thumb");
+    if (!c) {
+      c = document.createElement("canvas");
+      c.className = "thumb";
+      b.prepend(c);
+    }
+    c.width = 320;
+    c.height = 146;
+    const g = c.getContext("2d");
+    if (name) BannerArt.scene(g, 320, 146, spec, name, 0.3);
+    else BannerArt.stinger(g, 320, 146, spec, 0.45);
+    // Darker bottom: the tile's label sits there.
+    const fade = g.createLinearGradient(0, 50, 0, 146);
+    fade.addColorStop(0, "rgba(3,5,12,0)");
+    fade.addColorStop(1, "rgba(3,5,12,.88)");
+    g.fillStyle = fade;
+    g.fillRect(0, 0, 320, 146);
+  }
+}
+
+// ---------------- status bar ----------------
+let statusKey = "";
+function renderStatusBar(s) {
+  const items = [];
+  const pc = s.pcMode;
+  if (pc) items.push(["good", "Source: this PC"]);
+  else if (s.connected) items.push([s.fps >= 55 ? "good" : s.fps >= 28 ? "warn" : "bad", `Phone · ${s.link || "USB"} · ${s.fps ?? 0} fps${s.latencyMs != null ? ` · ${Math.round(s.latencyMs)} ms` : ""}`]);
+  else items.push(["bad", "Phone not connected"]);
+  const l = s.live;
+  if (l && l.active) {
+    for (const d of l.destinations || []) {
+      const st = d.state === "live" ? (d.dropped ? "warn" : "good") : d.state === "reconnecting" ? "bad" : "warn";
+      const txt = d.state === "live" ? `${d.name} · ${(d.kbps / 1000).toFixed(1)} Mbps · ${Math.round(d.fps)} fps${d.dropped ? ` · ${d.dropped} dropped` : ""}` : `${d.name} · ${STATE_TEXT[d.state] || d.state}`;
+      items.push([st, txt]);
+    }
+  } else items.push(["idle", "Not live"]);
+  if (s.recording) items.push(["live", `Recording · ${fmtTime(s.recording.seconds)}`]);
+  if (s.scene) items.push(["info", `Scene: ${SCENE_NAMES[s.scene] || s.scene}`]);
+  const key = JSON.stringify(items);
+  if (key === statusKey) return;
+  statusKey = key;
+  $("statusbar").innerHTML = items.map(([c, t]) => `<span class="sb ${c}"><i></i>${escapeHtml(t)}</span>`).join("");
+}
+
 function toast(msg) {
   const t = $("toast");
   t.textContent = msg;
@@ -1046,6 +1226,10 @@ function renderScene(s) {
     });
   }
   const on = s.scene === "stinger" ? null : s.scene || wantedScene || null;
+  // "auto" on Be right back while the app put it up (privacy cover / phone gone).
+  const auto = !!(s.privacy && s.privacy.auto && s.scene === "brb");
+  const brbTile = document.querySelector('.scene[data-scene="brb"]');
+  if (brbTile) brbTile.classList.toggle("auto", auto);
   if (on === currentScene) return;
   currentScene = on;
   for (const b of document.querySelectorAll(".scene")) b.classList.toggle("on", (b.dataset.scene || null) === on && !!on);
@@ -1093,6 +1277,18 @@ $("sceneMusic").addEventListener("change", async (e) => {
 
 // Short messages from the app itself: clip saved, hotkey pressed, problems.
 listen("notice", (e) => toast(e.payload.text));
+// "Clip 30 s" on the phone's notification.
+listen("phone-clip", (e) => {
+  invoke("save_clip", { seconds: Number(e.payload) || 30 })
+    .then(() => toast("Clip saved (from the phone)"))
+    .catch((err) => toast(String(err)));
+});
+window.showScene = (name) => showScene(name);
+// Test rig (only sent when the app runs with its test control on): make a
+// scene ready exactly as a click would.
+listen("test-prepare", (e) => {
+  prepareScene(e.payload).catch((err) => console.warn("test prepare", err));
+});
 
 // ---------------- hotkeys ----------------
 

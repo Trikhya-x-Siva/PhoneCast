@@ -1,0 +1,15 @@
+<script>
+// Preview harness (not shipped): fake app so the UI renders in a browser.
+(function(){
+  const listeners={};
+  const status={connected:true,link:"USB",fps:60,latencyMs:8,mbps:12.3,video:{width:1920,height:872},scene:null,bannerOn:true,
+    privacy:{on:true,app:{pkg:"jp.konami.pesam",label:"eFootball",game:true},auto:false},
+    live:{active:true,seconds:1842,destinations:[{name:"YouTube",state:"live",quality:"1440p60 HEVC",kbps:23900,fps:60,dropped:0,reconnects:0}]},
+    adb:{found:true,devices:["x"],reversed:["x"]},recording:null,replay:{seconds:90},phone:{},bannerMoment:{playing:"follow",waiting:null}};
+  window.__previewStatus=status;
+  const answers={get_live_settings:{framing:"banner",destinations:[],setupDone:true},get_banner:{style:"blitz",title:"PhantomBlitz",line:"@Phantom.Blitzz · BGMI & smooth gameplay · Subscribe",right:"BGMI LIVE",color:"#8b5cf6",color2:"#22d3ee",_clips:[],_loop:true,savedKey:"x",social:"@phantom.blitzz on Instagram",popups:{on:true,every:180,list:{subscribe:true,like:true,follow:true,discord:false,custom:false}}},get_info:{lanIp:"192.168.1.20",previewPort:9}};
+  window.__TAURI__={core:{invoke:async(cmd,args)=>{ if(cmd in answers) return answers[cmd]; if(cmd==="scene_ready") return true; return null;}},
+    event:{listen:async(name,fn)=>{(listeners[name]=listeners[name]||[]).push(fn);return ()=>{}}}};
+  setInterval(()=>{(listeners.status||[]).forEach(f=>f({payload:status}))},1000);
+})();
+</script>

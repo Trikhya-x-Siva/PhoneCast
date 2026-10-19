@@ -52,6 +52,7 @@
 
   <main>
     <section class="stage">
+      <div id="alerts" class="alerts" aria-live="polite"></div>
       <div id="screen" class="screen">
         <canvas id="video"></canvas>
         <div id="overlayLayer" class="overlay-layer hidden" title="Drag to move, drag the corner to resize"></div>
@@ -75,10 +76,16 @@
           <span class="chip"><span id="hudLat">—</span> ms</span>
           <span class="chip"><span id="hudMbps">0</span> Mbps</span>
         </div>
+        <div id="sceneCover" class="scene-cover hidden"><small>Viewers see</small><b id="sceneCoverName">Be right back</b></div>
         <div class="badges">
           <div id="liveBadge" class="live-badge hidden"><i></i>LIVE <span id="liveTime">0:00</span></div>
           <div id="recBadge" class="rec-badge hidden"><i></i>REC <span id="recTime">0:00</span></div>
         </div>
+      </div>
+
+      <div id="program" class="program hidden" title="The banner as viewers see it under the game">
+        <canvas id="programStrip"></canvas>
+        <span class="program-tag" id="programTag">On stream under the game</span>
       </div>
 
       <section class="mixer">
@@ -211,7 +218,21 @@
         </label>
         <label class="field"><span>Channel name</span><input id="qbTitle" type="text" maxlength="40" placeholder="PhantomBlitz"></label>
         <label class="field"><span>Game label</span><input id="qbRight" type="text" maxlength="24" placeholder="BGMI LIVE"></label>
+        <div class="chips" id="qbChips"></div>
         <p class="hint" id="qbState" style="margin:4px 0 0"></p>
+        <div class="popups">
+          <div class="popups-head">
+            <b>Pop-ups</b>
+            <label class="switch" title="Shows the switched-on pop-ups in turn, by themselves">
+              <input type="checkbox" id="qbAuto" checked><span class="track"><span class="knob"></span></span>Auto every
+            </label>
+            <select id="qbEvery" title="How often">
+              <option value="120">2 min</option><option value="180">3 min</option><option value="300">5 min</option><option value="600">10 min</option>
+            </select>
+          </div>
+          <div id="qbPopups"></div>
+          <p class="now" id="qbNow"></p>
+        </div>
         <button class="btn ghost" id="qbEdit" style="margin-top:8px;width:100%">Edit banner design</button>
         <p class="hint" style="margin:6px 0 0">Changes show on stream within a few seconds, while live too. Shown with the Game + banner picture.</p>
       </div>
@@ -338,6 +359,7 @@
       </div>
     </aside>
   </main>
+  <footer id="statusbar" class="statusbar" aria-live="polite"></footer>
 
   <div id="liveModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="liveTitle">
     <div class="sheet">
@@ -416,6 +438,21 @@
         <span class="spacer"></span>
         <button class="btn ghost" id="setupDone">Close</button>
         <button class="btn live" id="setupApply">Use recommended quality</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="endModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="endTitle">
+    <div class="sheet narrow">
+      <div class="sheet-head">
+        <h2 id="endTitle">End the stream?</h2>
+        <button class="icon-btn" data-close title="Keep streaming"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <p class="sheet-sub" id="endSub">This ends it on every platform.</p>
+      <div class="end-choices">
+        <button class="btn live" id="endThanks">Show "Thanks for watching", end in 15 s</button>
+        <button class="btn ghost" id="endNow">End now</button>
+        <button class="btn ghost" data-close>Keep streaming</button>
       </div>
     </div>
   </div>

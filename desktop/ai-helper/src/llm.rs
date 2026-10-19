@@ -6,7 +6,7 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::{AddBos, LlamaModel, Special};
+use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::sampling::LlamaSampler;
 use std::num::NonZeroU32;
 use std::path::Path;
@@ -57,10 +57,12 @@ impl Rephraser {
             .model
             .new_context(&self.backend, ctx_params)
             .map_err(|e| e.to_string())?;
-        let tokens = self
-            .model
-            .str_to_token(&prompt, AddBos::Never)
-            .map_err(|e| e.to_string())?;
+        let vocab = self.model.vocab();
+        // No BOS; the chat markers (<|im_start|>…) are parsed as special tokens.
+        let tokens = vocab.tokenize(prompt.as_bytes(), false, true);
+        if tokens.is_empty() {
+            return Err("empty prompt".into());
+        }
         let mut batch = LlamaBatch::new(1024, 1);
         let last = tokens.len() - 1;
         for (i, t) in tokens.iter().enumerate() {
@@ -71,19 +73,16 @@ impl Rephraser {
         ctx.decode(&mut batch).map_err(|e| e.to_string())?;
         let mut sampler =
             LlamaSampler::chain_simple([LlamaSampler::temp(0.6), LlamaSampler::dist(42)]);
-        let mut out = String::new();
+        // Bytes, not text: one character can span two tokens.
+        let mut out: Vec<u8> = Vec::new();
         let mut pos = tokens.len() as i32;
         for _ in 0..120 {
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
             sampler.accept(token);
-            if self.model.is_eog_token(token) {
+            if vocab.is_eog(token) {
                 break;
             }
-            let piece = self
-                .model
-                .token_to_str(token, Special::Tokenize)
-                .map_err(|e| e.to_string())?;
-            out.push_str(&piece);
+            out.extend(vocab.token_to_piece(token, false, None));
             batch.clear();
             batch
                 .add(token, pos, &[0], true)
@@ -91,6 +90,23 @@ impl Rephraser {
             pos += 1;
             ctx.decode(&mut batch).map_err(|e| e.to_string())?;
         }
-        Ok(out)
+        Ok(String::from_utf8_lossy(&out).into_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The real model rewrites an FAQ answer, keeps its facts, stays short:
+    /// `cargo test --release --features llm llm_rephrases -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn llm_rephrases_keeping_facts() {
+        let r = super::Rephraser::load(&crate::models::LLM.path()).expect("load model");
+        let t = std::time::Instant::now();
+        println!("raw: {:?}", r.generate("which game is this?", "Today we play BGMI, ranked, from 9 pm."));
+        let out = r.rephrase("which game is this?", "Today we play BGMI, ranked, from 9 pm.");
+        println!("-> {out:?} in {:?}", t.elapsed());
+        assert!(out.to_lowercase().contains("bgmi"), "fact lost: {out}");
+        assert!(out.chars().count() <= 400);
     }
 }

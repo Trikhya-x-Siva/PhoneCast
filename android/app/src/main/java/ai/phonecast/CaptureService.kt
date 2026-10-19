@@ -79,6 +79,13 @@ class CaptureService : Service(), StreamClient.Listener {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_CMD) {
+            // Live controls from the notification: the PC does the work.
+            val cmd = intent.getStringExtra(EXTRA_CMD) ?: return START_NOT_STICKY
+            client?.send(Packet(Protocol.PHONE_COMMAND, 0, System.nanoTime() / 1000, cmd.toByteArray()))
+            buzz()
+            return START_NOT_STICKY
+        }
         if (projection != null || intent == null) return START_NOT_STICKY
 
         settings = StreamSettings.fromIntent(intent)
@@ -511,13 +518,22 @@ class CaptureService : Service(), StreamClient.Listener {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
+        fun cmd(code: Int, name: String) = PendingIntent.getService(
+            this, code,
+            Intent(this, CaptureService::class.java).setAction(ACTION_CMD).putExtra(EXTRA_CMD, name),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        // Live controls without leaving the game: Be right back, back to the
+        // game, and a 30 s clip. Stop lives in the app (one tap away).
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle("PhoneCast")
+            .setContentTitle("OSSG")
             .setContentText(text)
             .setOngoing(true)
             .setContentIntent(open)
-            .addAction(Notification.Action.Builder(null, "Stop", stop).build())
+            .addAction(Notification.Action.Builder(null, "Be right back", cmd(11, "brb")).build())
+            .addAction(Notification.Action.Builder(null, "Back to game", cmd(12, "game")).build())
+            .addAction(Notification.Action.Builder(null, "Clip 30 s", cmd(13, "clip")).build())
             .build()
     }
 
@@ -554,6 +570,8 @@ class CaptureService : Service(), StreamClient.Listener {
         private const val NOTIFICATION_ID = 1
         private const val MIN_BITRATE = 2_000_000
         const val ACTION_STOP = "ai.phonecast.STOP"
+        const val ACTION_CMD = "ai.phonecast.CMD"
+        const val EXTRA_CMD = "cmd"
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_RESULT_DATA = "resultData"
 

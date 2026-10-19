@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OSSG — Open Source Streaming for Gaming</title>
+  <link rel="stylesheet" href="../../desktop/ui/style.css" />
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+
+  <header>
+    <div class="brand">
+      <svg viewBox="0 0 108 108" class="logo" aria-hidden="true">
+        <defs>
+          <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#8b5cf6"/><stop offset="1" stop-color="#0e9fc4"/>
+          </linearGradient>
+        </defs>
+        <rect width="108" height="108" rx="26" fill="url(#lg)"/>
+        <path fill="#fff" fill-rule="evenodd" d="M38 24h26a6 6 0 0 1 6 6v48a6 6 0 0 1-6 6H38a6 6 0 0 1-6-6V30a6 6 0 0 1 6-6zm0 8v42h26V32z"/>
+        <path class="waves" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" d="M76 40a18 18 0 0 1 0 28M84 34a28 28 0 0 1 0 40"/>
+      </svg>
+      <span class="wordmark"><b>OSSG</b><small>Open Source Streaming for Gaming</small></span>
+    </div>
+
+    <div id="pill" class="pill">
+      <span class="dot"></span><span id="pillText">Waiting for phone</span>
+    </div>
+
+    <div class="actions">
+      <button id="hotkeysBtn" class="btn ghost icon-only" title="Hotkeys">
+        <svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>
+      </button>
+      <button id="folderBtn" class="btn ghost" title="Open recordings folder">
+        <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span class="label">Recordings</span>
+      </button>
+      <button id="clipsBtn" class="btn ghost" title="Open clips folder">
+        <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg>
+        <span class="label">Clips</span>
+      </button>
+      <button id="recBtn" class="btn rec" disabled>
+        <span class="recdot"></span><span id="recText">Record</span>
+      </button>
+      <button id="liveBtn" class="btn live" title="Stream to YouTube and Twitch">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14"/></svg>
+        <span id="liveText">Go live</span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section class="stage">
+      <div id="alerts" class="alerts" aria-live="polite"></div>
+      <div id="screen" class="screen">
+        <canvas id="video"></canvas>
+        <div id="overlayLayer" class="overlay-layer hidden" title="Drag to move, drag the corner to resize"></div>
+
+        <div id="empty" class="empty">
+          <div class="phone-anim" aria-hidden="true">
+            <div class="ph"><div class="ph-screen"></div></div>
+            <div class="beam b1"></div><div class="beam b2"></div><div class="beam b3"></div>
+          </div>
+          <div class="steps">
+            <h2>Connect your phone</h2>
+            <div class="step"><span>1</span><p><b>USB</b> — plug the phone in. OSSG sets everything up by itself.</p></div>
+            <div class="step"><span>2</span><p><b>Wi-Fi</b> — in the phone app choose Wi-Fi and enter <code id="wifiAddr">…</code></p></div>
+            <div class="step"><span>3</span><p>Open <b>OSSG</b> on the phone, tap <b>Start streaming</b>, then open your game.</p></div>
+          </div>
+        </div>
+
+        <div id="hud" class="hud hidden">
+          <span class="chip"><i class="live-dot"></i><span id="hudRes">—</span></span>
+          <span class="chip"><span id="hudFps">0</span> fps</span>
+          <span class="chip"><span id="hudLat">—</span> ms</span>
+          <span class="chip"><span id="hudMbps">0</span> Mbps</span>
+        </div>
+        <div id="sceneCover" class="scene-cover hidden"><small>Viewers see</small><b id="sceneCoverName">Be right back</b></div>
+        <div class="badges">
+          <div id="liveBadge" class="live-badge hidden"><i></i>LIVE <span id="liveTime">0:00</span></div>
+          <div id="recBadge" class="rec-badge hidden"><i></i>REC <span id="recTime">0:00</span></div>
+        </div>
+      </div>
+
+      <div id="program" class="program hidden" title="The banner as viewers see it under the game">
+        <canvas id="programStrip"></canvas>
+        <span class="program-tag" id="programTag">On stream under the game</span>
+      </div>
+
+      <section class="mixer">
+        <div class="mixer-head">
+          <h3>Audio mixer</h3>
+          <div class="toggles">
+            <label class="switch" title="Removes keyboard, fan and background noise from your mic">
+              <input type="checkbox" id="nsToggle" checked><span class="track"><span class="knob"></span></span>
+              Noise suppression
+            </label>
+            <label class="switch" title="Lowers the game volume while you or your teammates talk">
+              <input type="checkbox" id="duckToggle"><span class="track"><span class="knob"></span></span>
+              Auto-duck game
+            </label>
+          </div>
+        </div>
+        <div class="strips">
+          <div class="strip" data-src="game">
+            <div class="strip-top">
+              <div class="icon game"><svg viewBox="0 0 24 24"><path d="M6 9h4M8 7v4M15 9h.01M18 11h.01"/><path d="M17.3 5H6.7a4 4 0 0 0-4 3.6L2 15a3 3 0 0 0 5.2 2.1L9 15h6l1.8 2.1A3 3 0 0 0 22 15l-.7-6.4A4 4 0 0 0 17.3 5z"/></svg></div>
+              <div class="names"><b>Game</b><small class="status">Waiting for phone</small></div>
+              <button class="mute" title="Mute"><svg viewBox="0 0 24 24"><path class="spk" d="M11 5 6 9H2v6h4l5 4z"/><path class="on" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/><path class="off" d="m23 9-6 6M17 9l6 6"/></svg></button>
+            </div>
+            <div class="meter"><div class="fill"></div><div class="peak"></div></div>
+            <div class="vol"><input type="range" min="0" max="200" value="100"><output>100%</output></div>
+          </div>
+
+          <div class="strip" data-src="discord">
+            <div class="strip-top">
+              <div class="icon discord"><svg viewBox="0 0 24 24"><path d="M8 12h.01M16 12h.01"/><path d="M7.5 7.5c3-1 6-1 9 0M7 16.5c3.3 1.3 6.7 1.3 10 0"/><path d="M15.5 17.5 16.5 19.5c3.5-1 5-3 5.5-4.5 0-4-1-7.5-3-10.5-1.5-.7-3-1.2-4.5-1.5l-1 2M8.5 17.5 7.5 19.5c-3.5-1-5-3-5.5-4.5 0-4 1-7.5 3-10.5 1.5-.7 3-1.2 4.5-1.5l1 2"/></svg></div>
+              <div class="names"><b>Discord</b><small class="status">Looking for Discord…</small></div>
+              <button class="mute" title="Mute"><svg viewBox="0 0 24 24"><path class="spk" d="M11 5 6 9H2v6h4l5 4z"/><path class="on" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/><path class="off" d="m23 9-6 6M17 9l6 6"/></svg></button>
+            </div>
+            <div class="meter"><div class="fill"></div><div class="peak"></div></div>
+            <div class="vol"><input type="range" min="0" max="200" value="100"><output>100%</output></div>
+            <select id="voiceSelect" title="Where Discord is running"><option value="auto">Auto · Discord app, else browser</option></select>
+          </div>
+
+          <div class="strip" data-src="mic">
+            <div class="strip-top">
+              <div class="icon mic"><svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg></div>
+              <div class="names"><b>Mic</b><small class="status">Starting…</small></div>
+              <button class="mute" title="Mute"><svg viewBox="0 0 24 24"><path class="spk" d="M11 5 6 9H2v6h4l5 4z"/><path class="on" d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/><path class="off" d="m23 9-6 6M17 9l6 6"/></svg></button>
+            </div>
+            <div class="meter"><div class="fill"></div><div class="peak"></div></div>
+            <div class="vol"><input type="range" min="0" max="200" value="100"><output>100%</output></div>
+            <select id="micSelect" title="Microphone"><option value="">Windows default mic</option></select>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <aside>
+      <div class="card">
+        <h3>Source</h3>
+        <div class="seg wide-seg" id="sourceSeg">
+          <button data-v="phone"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>Phone</button>
+          <button data-v="screen"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>This PC</button>
+        </div>
+        <div id="pcOptions" class="pc-options hidden">
+          <label class="field"><span>Capture</span>
+            <div class="key-row"><select id="captureSelect"></select><button id="refreshWindows" class="mini" title="Refresh the list of open windows">&#x21bb;</button></div>
+          </label>
+          <p id="sourceError" class="source-error hidden"></p>
+          <label class="switch" style="margin:10px 0 6px"><input type="checkbox" id="camToggle"><span class="track"><span class="knob"></span></span>Webcam picture-in-picture</label>
+          <div id="camOptions" class="cam-options hidden">
+            <label class="field"><span>Camera</span><select id="camSelect"></select></label>
+            <div class="row2">
+              <label class="field"><span>Size</span><select id="camSize"><option value="0.18">Small</option><option value="0.25" selected>Medium</option><option value="0.33">Large</option><option value="0.45">Huge</option></select></label>
+              <label class="field"><span>Position</span><select id="camCorner"><option value="br" selected>Bottom right</option><option value="bl">Bottom left</option><option value="tr">Top right</option><option value="tl">Top left</option><option value="free">Where I dragged it</option></select></label>
+            </div>
+            <label class="switch" style="margin-top:6px"><input type="checkbox" id="camMirror"><span class="track"><span class="knob"></span></span>Mirror</label>
+          </div>
+          <div class="card-head overlays-head"><span>Overlays</span>
+            <span><button id="addImage" class="mini" title="Add a PNG logo or image">+ Image</button> <button id="addText" class="mini" title="Add a line of text">+ Text</button></span>
+          </div>
+          <div id="overlayList" class="overlay-list"></div>
+          <p id="sourceHint" class="hint">Captures the whole screen straight on the GPU. For PC games use borderless/windowed fullscreen; exclusive fullscreen may show black.</p>
+        </div>
+        <div id="deviceWarnings" class="warn-box small hidden"></div>
+      </div>
+
+      <div class="card">
+        <h3>Scenes</h3>
+        <div class="scene-row" id="sceneRow">
+          <button class="btn ghost scene" data-scene="starting">Starting soon</button>
+          <button class="btn ghost scene" data-scene="brb">Be right back</button>
+          <button class="btn ghost scene" data-scene="thanks">Thanks for watching</button>
+          <button class="btn ghost scene game" data-scene="">Back to game</button>
+        </div>
+        <label class="switch" style="margin:12px 0 2px" title="Shows Be right back whenever you leave the game on the phone (a message, a payment app, anything), and goes back to the game when you return. The phone sends no picture meanwhile.">
+          <input type="checkbox" id="privacyToggle" checked><span class="track"><span class="knob"></span></span>Privacy cover: Be right back when I leave the game
+        </label>
+        <p class="hint" id="privacyHint" style="margin:0"></p>
+        <label class="field" style="margin-top:10px"><span>Scene music (plays instead of game sound)</span><input id="sceneMusic" type="file" accept="audio/*"></label>
+        <p class="hint" id="sceneHint">Shows your avatar scene instead of the game, on stream and in recordings, without reconnecting. Works before the phone is connected, so you can go live on Starting soon. Your mic stays on; your banner stays underneath.</p>
+      </div>
+
+      <div class="card">
+        <h3>Clips</h3>
+        <div class="clip-row">
+          <button class="btn ghost clip" data-secs="15">Last 15 s<small id="hk-clip15"></small></button>
+          <button class="btn ghost clip" data-secs="30">Last 30 s<small id="hk-clip30"></small></button>
+          <button class="btn ghost clip" data-secs="60">Last 60 s<small id="hk-clip60"></small></button>
+        </div>
+        <label class="field" style="margin-top:10px"><span>Keep the last</span>
+          <select id="replaySelect">
+            <option value="0">Off</option>
+            <option value="30">30 seconds</option>
+            <option value="60">60 seconds</option>
+            <option value="90" selected>90 seconds (default)</option>
+            <option value="120">2 minutes</option>
+            <option value="180">3 minutes</option>
+            <option value="300">5 minutes</option>
+          </select>
+        </label>
+        <label class="field"><span>Clip picture</span>
+          <select id="clipLook">
+            <option value="original">Original phone picture · instant, no quality loss</option>
+            <option value="stream">Like the stream · 16:9 framing, takes a few seconds</option>
+          </select>
+        </label>
+        <p class="hint" id="replayHint">Clips are saved as MP4 in Videos\PhoneCast\Clips without re-encoding. The buffer lives in memory only.</p>
+      </div>
+
+      <div class="card" id="quickBanner">
+        <h3>Banner</h3>
+        <label class="switch" style="margin:4px 0 8px" title="Turns the banner under the game on or off, also while live (no restart)">
+          <input type="checkbox" id="qbOn" checked><span class="track"><span class="knob"></span></span>Show the banner on stream
+        </label>
+        <label class="field"><span>Channel name</span><input id="qbTitle" type="text" maxlength="40" placeholder="PhantomBlitz"></label>
+        <label class="field"><span>Game label</span><input id="qbRight" type="text" maxlength="24" placeholder="BGMI LIVE"></label>
+        <div class="chips" id="qbChips"></div>
+        <p class="hint" id="qbState" style="margin:4px 0 0"></p>
+        <div class="popups">
+          <div class="popups-head">
+            <b>Pop-ups</b>
+            <label class="switch" title="Shows the switched-on pop-ups in turn, by themselves">
+              <input type="checkbox" id="qbAuto" checked><span class="track"><span class="knob"></span></span>Auto every
+            </label>
+            <select id="qbEvery" title="How often">
+              <option value="120">2 min</option><option value="180">3 min</option><option value="300">5 min</option><option value="600">10 min</option>
+            </select>
+          </div>
+          <div id="qbPopups"></div>
+          <p class="now" id="qbNow"></p>
+        </div>
+        <button class="btn ghost" id="qbEdit" style="margin-top:8px;width:100%">Edit banner design</button>
+        <p class="hint" style="margin:6px 0 0">Changes show on stream within a few seconds, while live too. Shown with the Game + banner picture.</p>
+      </div>
+
+      <div id="liveCard" class="card live-card hidden">
+        <h3>Live</h3>
+        <div id="liveDests"></div>
+        <button class="btn ghost" id="liveEdit" style="margin-top:10px;width:100%">Change quality or picture</button>
+      </div>
+
+      <div class="card">
+        <h3>Stream health</h3>
+        <div class="stats">
+          <div class="tile"><span id="fps" class="big">0</span><span class="unit">fps</span></div>
+          <div class="tile"><span id="latency" class="big">—</span><span class="unit">ms delay</span></div>
+          <div class="tile"><span id="mbps" class="big">0</span><span class="unit">Mbps</span></div>
+        </div>
+        <canvas id="spark" class="spark" height="44"></canvas>
+        <dl>
+          <dt>Video</dt><dd id="videoInfo">—</dd>
+          <dt>Smoothness</dt><dd id="smooth">—</dd>
+          <dt>Dropped frames</dt><dd id="dropped">0</dd>
+          <dt>Round-trip</dt><dd id="rtt">—</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h3>Phone</h3>
+        <div class="phone-row">
+          <div class="ring" id="batRing" style="--p:0"><span id="batPct">—</span></div>
+          <dl>
+            <dt>Device</dt><dd id="device">—</dd>
+            <dt>Temperature</dt><dd id="temp">—</dd>
+            <dt>Heat</dt><dd id="thermal">—</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div id="aiCard" class="card ai-card">
+        <div class="card-head">
+          <h3>AI tools</h3>
+          <button id="aiPanelToggle" class="mini" title="Local, optional, CPU only. Runs as a separate program; off by default.">Off</button>
+        </div>
+        <label class="switch" title="Runs on this PC only, on the CPU, as a separate program. Nothing is sent anywhere except the chat connections you turn on.">
+          <input type="checkbox" id="aiEnabled"><span class="track"><span class="knob"></span></span>
+          Local AI helper <span id="aiProc" class="ai-proc">Off</span>
+        </label>
+        <div id="aiBody" class="ai-body off">
+          <details class="ai-sec" open>
+            <summary>Auto highlight clips <span id="aiClips"></span></summary>
+            <label class="switch"><input type="checkbox" id="aiHlEnabled"><span class="track"><span class="knob"></span></span>Spot exciting moments</label>
+            <div class="ai-score"><div id="aiScore"></div></div>
+            <label class="slider-label"><span>Sensitivity</span><output id="aiSensOut">Balanced</output></label>
+            <input id="aiSens" type="range" min="0" max="100" step="5" value="50">
+            <div class="row2">
+              <label class="field"><span>Clip length</span><select id="aiClipLen"><option value="15">15 s</option><option value="30" selected>30 s</option><option value="45">45 s</option><option value="60">60 s</option></select></label>
+              <label class="field"><span>Max per session</span><input id="aiMax" type="number" min="0" max="500" value="40"></label>
+            </div>
+            <label class="switch"><input type="checkbox" id="aiAsk" checked><span class="track"><span class="knob"></span></span>Ask before saving a clip</label>
+            <label class="switch" title="Downloads a 15 MB sound classifier (YAMNet) that recognises gunfire, cheering and laughter"><input type="checkbox" id="aiClassifier"><span class="track"><span class="knob"></span></span>Recognise sounds (15 MB download)</label>
+            <p class="hint">Watches game loudness, your voice and how fast chat moves. Clips come from the replay buffer and start ~25 s before the moment.</p>
+          </details>
+
+          <details class="ai-sec" open>
+            <summary>Chat</summary>
+            <label class="switch"><input type="checkbox" id="aiChatEnabled"><span class="track"><span class="knob"></span></span>Read chat</label>
+            <div class="ai-plat">
+              <label class="switch"><input type="checkbox" id="aiTwEnabled"><span class="track"><span class="knob"></span></span>Twitch</label>
+              <span id="aiTwState" class="ai-state">&mdash;</span>
+            </div>
+            <div class="key-row"><input id="aiTwClientId" type="text" spellcheck="false" placeholder="Client ID of your Twitch app"><button id="aiTwLogin" class="mini">Log in to Twitch</button></div>
+            <p class="hint">One-time setup: at <b>dev.twitch.tv/console/apps</b> register an app (category Chat Bot, client type <b>Public</b>, OAuth redirect <b>http://localhost</b>) and paste its Client ID. Login happens in your browser with a code; OSSG never sees your password.</p>
+            <div class="ai-plat">
+              <label class="switch"><input type="checkbox" id="aiYtEnabled"><span class="track"><span class="knob"></span></span>YouTube</label>
+              <span id="aiYtState" class="ai-state">&mdash;</span>
+            </div>
+            <div class="key-row"><input id="aiYtChannel" type="text" spellcheck="false" placeholder="@yourchannel"></div>
+            <label class="switch" title="A small window that stays above your game"><input type="checkbox" id="aiOverlay"><span class="track"><span class="knob"></span></span>Show chat above the game (overlay)</label>
+            <div class="ai-plat">
+              <label class="switch"><input type="checkbox" id="aiSpam" checked><span class="track"><span class="knob"></span></span>Flag spam</label>
+              <label class="switch"><input type="checkbox" id="aiSpamLinks" checked><span class="track"><span class="knob"></span></span>Links</label>
+              <label class="field inline"><span>Max/10 s</span><input id="aiSpamRate" type="number" min="1" max="60" value="5"></label>
+            </div>
+            <div class="ai-plat">
+              <label class="switch"><input type="checkbox" id="aiFaq" checked><span class="track"><span class="knob"></span></span>FAQ answers</label>
+              <span id="aiFaqInfo" class="ai-state"></span>
+            </div>
+            <label class="switch" title="Without this, every answer waits for you to click Post"><input type="checkbox" id="aiFaqAuto"><span class="track"><span class="knob"></span></span>Reply to <code>!ask</code> automatically (Twitch)</label>
+            <label class="switch" title="Downloads a 1.1 GB language model that runs on the CPU (max 4 threads)"><input type="checkbox" id="aiLlm"><span class="track"><span class="knob"></span></span>Reword answers with a local model (1.1 GB download)</label>
+            <div class="row"><button id="aiFaqOpen" class="mini">Edit answers (faq.yaml)</button><button id="aiFaqReload" class="mini">Reload FAQ</button><button id="aiModlogBtn" class="mini">Mod log</button></div>
+            <pre id="aiModlog" class="ai-modlog hidden"></pre>
+          </details>
+
+          <div class="ai-sec">
+            <summary>Downloads</summary>
+            <div id="aiModels" class="ai-models"></div>
+            <p class="hint">Models are fetched only when you switch a feature on, checked against a known SHA-256, and kept in %APPDATA%\PhoneCast\ai\models.</p>
+          </div>
+
+          <div id="aiSuggest" class="ai-suggest"></div>
+          <div id="aiChat" class="ai-chat"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Connection</h3>
+        <dl>
+          <dt>Link</dt><dd id="link">—</dd>
+          <dt>USB</dt><dd id="usb">—</dd>
+          <dt>Wi-Fi address</dt><dd id="lan" class="mono">—</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h3>Quality</h3>
+        <label class="slider-label">
+          <span>Phone → PC bitrate</span>
+          <span id="brValue" class="mono">50 Mbps</span>
+        </label>
+        <input id="bitrate" type="range" min="10" max="100" step="5" value="50" />
+        <p class="hint">USB: 50 Mbps is visually lossless. Wi-Fi: 15–30 Mbps; OSSG lowers it automatically if the network struggles.</p>
+        <button id="keyBtn" class="btn ghost wide">Refresh picture</button>
+        <button id="logBtn" class="btn ghost wide" title="Opens the log folder. Attach the log when reporting a problem.">Open diagnostics</button>
+      </div>
+    </aside>
+  </main>
+  <footer id="statusbar" class="statusbar" aria-live="polite"></footer>
+
+  <div id="liveModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="liveTitle">
+    <div class="sheet">
+      <div class="sheet-head">
+        <h2 id="liveTitle">Go live</h2>
+        <button class="icon-btn" data-close title="Close"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <p class="sheet-sub">Stream to one platform or several at once. Each gets settings that follow its official limits, encoded on <b id="encName">your GPU</b>. Star the <b>Main</b> one: it keeps full quality if your upload runs short.</p>
+      <div id="ffmpegMissing" class="warn-box hidden">FFmpeg isn't installed on this PC, so OSSG can't go live yet. Click <b>Setup check</b> below to install it.</div>
+
+      <div id="destList" class="dest-list"></div>
+      <div class="add-row"><span>Add a platform</span><div id="addDest" class="add-chips"></div></div>
+      <ul id="liveIssues" class="issues" aria-live="polite"></ul>
+
+      <div class="framing">
+        <span>Picture</span>
+        <div class="seg" id="framing">
+          <button data-v="banner" title="16:9 like other streamers: the whole game full width on top, nothing cut or stretched, and your banner in the strip below">Game + banner</button>
+          <button data-v="phone" title="Exactly your phone screen: the stream takes the phone's own wide shape (2376×1080 at 1080p). No bars, blur, crop or stretch. Phone viewers see it full screen. YouTube and custom servers only; Twitch, Kick and Facebook get the blurred 16:9 picture">Phone shape</button>
+          <button data-v="blur" title="Whole game screen, nothing cut, no stretching. The space above and below is filled with a soft blurred copy of the game (what most mobile streamers use)">Blurred background</button>
+          <button data-v="fit" title="Whole game screen with black bars above and below">Black bars</button>
+          <button data-v="fill" title="Fills the frame but trims the sides, so edge buttons and the map can be cut">Crop sides</button>
+        </div>
+      </div>
+      <div id="bannerEditor" class="banner-editor hidden">
+        <canvas id="bannerCanvas" width="1920" height="208" aria-label="Banner preview"></canvas>
+        <div class="banner-fields">
+          <label class="field"><span>Style</span><select id="bnStyle"><option value="blitz">Blitz · electric</option><option value="clean">Clean</option></select></label>
+          <label class="field"><span>Channel name</span><input id="bnTitle" maxlength="40" placeholder="Your channel name"></label>
+          <label class="field"><span>Second line</span><input id="bnLine" maxlength="80" placeholder="YT · IG · Discord: @yourname"></label>
+          <label class="field"><span>Game (change it per stream)</span><input id="bnRight" maxlength="30" placeholder="e.g. BGMI LIVE"></label>
+          <label class="field bn-color"><span>Colours</span><span class="bn-colors"><input id="bnColor" type="color" value="#8b5cf6"><input id="bnColor2" type="color" value="#22d3ee"></span></label>
+          <label class="field"><span>Logo (optional)</span><input id="bnLogo" type="file" accept="image/png,image/jpeg,image/webp"></label>
+          <label class="field"><span>Or your own banner image</span><input id="bnImage" type="file" accept="image/png,image/jpeg,image/webp"></label>
+        </div>
+        <p class="hint">Shown under the game while you stream. Saved on this PC; YouTube needs no setup for it.</p>
+      </div>
+
+      <div class="sheet-foot">
+        <div class="upload" id="uploadBox"><span><b id="uploadNeed">—</b> upload needed</span><small id="uploadHave">upload not measured yet</small></div>
+        <button class="btn ghost" id="liveSetup" title="Encoder, FFmpeg and upload speed check">Setup check</button>
+        <button class="btn ghost" id="liveSave">Save</button>
+        <button class="btn live" id="liveStart">Start streaming</button>
+      </div>
+      <p class="fine">Stream keys are encrypted with your Windows account and never leave this PC except to the platform they belong to.</p>
+    </div>
+  </div>
+
+  <div id="setupModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
+    <div class="sheet setup-sheet">
+      <div class="sheet-head">
+        <h2 id="setupTitle">Setup check</h2>
+        <button class="icon-btn" data-close title="Close"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <p class="sheet-sub">A one-minute check so your first stream is right. Run it again any time from <b>Go live → Setup check</b>.</p>
+      <ol class="setup-steps">
+        <li class="sstep" id="stEnc" data-state="pending"><i class="mark"></i><div><b>Video encoder</b><small class="detail">Waiting…</small></div></li>
+        <li class="sstep" id="stFf" data-state="pending"><i class="mark"></i><div><b>FFmpeg, the streaming engine</b><small class="detail">Waiting…</small>
+          <div class="bar hidden"><i></i></div>
+          <button id="ffInstall" class="btn ghost hidden">Install FFmpeg (about 115 MB)</button></div></li>
+        <li class="sstep" id="stUp" data-state="pending"><i class="mark"></i><div><b>Upload speed</b><small class="detail">Measures for about 10 seconds and keeps the slowest moment, because a stream has to survive the worst second, not the average.</small>
+          <div class="bar hidden"><i></i></div>
+          <button id="upRun" class="btn ghost">Measure upload</button></div></li>
+        <li class="sstep" id="stRec" data-state="pending"><i class="mark"></i><div><b>Recommended quality</b><small class="detail">Measure your upload first.</small><div id="recList" class="rec-list"></div></div></li>
+      </ol>
+      <details class="yt-tips">
+        <summary>Settings to check in YouTube Studio</summary>
+        <ul>
+          <li><b>Stream latency: Normal.</b> Studio → Go live → Stream settings. Low and Ultra-low latency reject 4K and lower the quality YouTube shows.</li>
+          <li><b>Dual stream (vertical) off</b>, unless you want Shorts made from this stream.</li>
+          <li><b>Auto-start and Auto-stop off</b>, so a short reconnect never ends your broadcast. Start and end it yourself in Studio.</li>
+          <li>Use a <b>reusable stream key</b> (the default key) so the key saved here keeps working.</li>
+        </ul>
+      </details>
+      <div class="sheet-foot">
+        <span class="spacer"></span>
+        <button class="btn ghost" id="setupDone">Close</button>
+        <button class="btn live" id="setupApply">Use recommended quality</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="endModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="endTitle">
+    <div class="sheet narrow">
+      <div class="sheet-head">
+        <h2 id="endTitle">End the stream?</h2>
+        <button class="icon-btn" data-close title="Keep streaming"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <p class="sheet-sub" id="endSub">This ends it on every platform.</p>
+      <div class="end-choices">
+        <button class="btn live" id="endThanks">Show "Thanks for watching", end in 15 s</button>
+        <button class="btn ghost" id="endNow">End now</button>
+        <button class="btn ghost" data-close>Keep streaming</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="hotkeysModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="hotkeysTitle">
+    <div class="sheet narrow">
+      <div class="sheet-head">
+        <h2 id="hotkeysTitle">Hotkeys</h2>
+        <button class="icon-btn" data-close title="Close"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+      <p class="sheet-sub">These work while your game has the focus. Click a key box and press the new combination (it needs Ctrl, Shift, Alt or Win). Backspace clears it.</p>
+      <div id="hotkeyRows" class="hotkey-rows"></div>
+      <div class="sheet-foot">
+        <button class="btn ghost" id="hotkeysReset">Reset to defaults</button>
+        <button class="btn live" id="hotkeysSave">Save</button>
+      </div>
+      <p class="fine">If a combination is already used by another app, OSSG says so and you can pick another.</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script>
+// Preview harness (not shipped): fake app so the UI renders in a browser.
+(function(){
+  const listeners={};
+  const status={connected:true,link:"USB",fps:60,latencyMs:8,mbps:12.3,video:{width:1920,height:872},scene:null,bannerOn:true,
+    privacy:{on:true,app:{pkg:"jp.konami.pesam",label:"eFootball",game:true},auto:false},
+    live:{active:true,seconds:1842,destinations:[{name:"YouTube",state:"live",quality:"1440p60 HEVC",kbps:23900,fps:60,dropped:0,reconnects:0}]},
+    adb:{found:true,devices:["x"],reversed:["x"]},recording:null,replay:{seconds:90},phone:{},bannerMoment:{playing:"follow",waiting:null}};
+  window.__previewStatus=status;
+  const answers={get_live_settings:{framing:"banner",destinations:[],setupDone:true},get_banner:{style:"blitz",title:"PhantomBlitz",line:"@Phantom.Blitzz · BGMI & smooth gameplay · Subscribe",right:"BGMI LIVE",color:"#8b5cf6",color2:"#22d3ee",_clips:[],_loop:true,savedKey:"x",social:"@phantom.blitzz on Instagram",popups:{on:true,every:180,list:{subscribe:true,like:true,follow:true,discord:false,custom:false}}},get_info:{lanIp:"192.168.1.20",previewPort:9}};
+  window.__TAURI__={core:{invoke:async(cmd,args)=>{ if(cmd in answers) return answers[cmd]; if(cmd==="scene_ready") return true; return null;}},
+    event:{listen:async(name,fn)=>{(listeners[name]=listeners[name]||[]).push(fn);return ()=>{}}}};
+  setInterval(()=>{(listeners.status||[]).forEach(f=>f({payload:status}))},1000);
+})();
+</script>
+<script src="../../desktop/ui/app.js"></script>
+  <script src="../../desktop/ui/banner.js"></script>
+  <script src="../../desktop/ui/golive.js"></script>
+  <script src="../../desktop/ui/ai.js"></script>
+</body>
+</html>

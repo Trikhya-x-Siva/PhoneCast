@@ -806,7 +806,8 @@ pub fn check_url(platform: Platform, url: &str, dest: &str) -> Vec<Issue> {
             u.starts_with("rtmp://") || u.starts_with("rtmps://") || u.starts_with("srt://")
         }
         Platform::Twitch => u.starts_with("rtmps://") || u.starts_with("rtmp://"),
-        _ => u.starts_with("rtmps://"),
+        // A server on this PC (a local test or relay) needs no encryption.
+        _ => u.starts_with("rtmps://") || u.starts_with("rtmp://127.0.0.1"),
     };
     if !ok_scheme {
         out.push(issue(

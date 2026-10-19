@@ -5,6 +5,21 @@ versions follow [SemVer](https://semver.org).
 
 ## [Unreleased]
 ### Added
+- **Live banner control**: banner on/off, channel name and game label
+  (one-tap chips, plus the game open on the phone) change while live, on
+  stream in ~0.3 s, no restart. The channel's character clip plays in the
+  banner.
+- **Scenes with the channel's Veo clips** (green screen cut out), and an
+  action clip on "Back to game".
+- **Privacy cover**: Be right back by itself when the phone leaves the
+  game, drops, or turns portrait; back to the game by itself.
+- **Phone notification controls**: Be right back, Back to game, Clip 30 s.
+- **Safe End stream**: confirm, or "Thanks for watching, then end in 15 s".
+- **Alert bar** for anything viewers notice (reconnecting, phone gone,
+  cover on, recording problem, phone hot); stays until resolved.
+- **Local stress-test rig** (`tools/stress`): stand-in phone and platform,
+  repeats every live feature and checks the received stream for gaps,
+  keyframe spacing, frame rate and bitrate.
 - **Platform presets** for YouTube, Twitch, Kick, Facebook Gaming and any
   RTMP/RTMPS/SRT server, built from each platform's official ingest specs
   (codec, size, CBR bitrate, 2 s keyframes, B-frames, profile/level, AAC).
@@ -24,6 +39,10 @@ versions follow [SemVer](https://semver.org).
 - NVENC: two-pass (quarter resolution), B-frames as references, fixed
   keyframes (no scene-cut keyframes), short lookahead, 1 s CBR buffer.
 ### Fixed
+- A ~1 s send queue dropped 2 s of picture (until the next keyframe) on any
+  short upload stall; now ~5 s. Likely cause of buffering on YouTube.
+- Stream start took 5-12 s with the live banner (FFmpeg probed it); instant.
+- ~2 s frozen frame after "Back to game"; ~1 s audio hole when the phone drops.
 - Blurred-background framing on NVIDIA sent 1920x1088 instead of 1080p
   (and 1280x736 for 720p).
 - **Local AI tools (optional, off by default)** in a separate, crash-isolated

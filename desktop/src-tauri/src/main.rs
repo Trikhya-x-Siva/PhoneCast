@@ -22,6 +22,7 @@ mod replay;
 mod scenes;
 mod setup;
 mod sinks;
+mod test_control;
 
 use crate::core::Core;
 use serde_json::{json, Value};
@@ -367,6 +368,141 @@ fn save_banner_plain(core: CoreState, request: tauri::ipc::Request<'_>) -> Resul
     std::fs::rename(&tmp, banner_feed::plain_path()).map_err(|e| e.to_string())?;
     banner_feed::changed();
     Ok(())
+}
+
+/// One pop-up piece: 150 JPEG frames (5 s) of the banner loop from frame
+/// `x-at` (0, 150, 300 or 450) with the pop-up drawn over them; kept as an
+/// H.264 piece next to the current banner's loop, with the character clip
+/// laid over at the same loop position.
+#[tauri::command(async)]
+fn save_banner_moment(core: CoreState, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(body) = request.body() else {
+        return Err("expected raw frame data".into());
+    };
+    let h = |k: &str| {
+        request
+            .headers()
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    };
+    let name = h("x-name");
+    if !banner_feed::MOMENT_NAMES.contains(&name.as_str()) {
+        return Err("unknown pop-up".into());
+    }
+    let at: usize = h("x-at").parse().map_err(|_| "bad position")?;
+    if !at.is_multiple_of(banner_feed::MOMENT_FRAMES) || at >= 600 {
+        return Err("bad position".into());
+    }
+    let sizes: Vec<usize> = h("x-sizes")
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse().map_err(|_| "bad frame size".to_string()))
+        .collect::<Result<_, _>>()?;
+    if sizes.len() != banner_feed::MOMENT_FRAMES || sizes.iter().sum::<usize>() != body.len() {
+        return Err("frame data does not match its sizes".into());
+    }
+    let dir = live::banner_frames_dir().ok_or("save the banner first")?;
+    let tmp = dir.join(format!("tmp-{name}-{at}"));
+    std::fs::remove_dir_all(&tmp).ok();
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let mut off = 0;
+    for (i, n) in sizes.iter().enumerate() {
+        std::fs::write(tmp.join(format!("{i:04}.jpg")), &body[off..off + n])
+            .map_err(|e| e.to_string())?;
+        off += n;
+    }
+    let ffmpeg = core
+        .live
+        .ffmpeg()
+        .ok_or("FFmpeg is not installed on this PC")?;
+    let num = |k: &str| h(k).parse::<u32>().ok();
+    let clip = match (num("x-w"), num("x-h")) {
+        (Some(w), Some(hh)) => clips::prepare(&ffmpeg, "gaming", w, hh, Some(480))
+            .ok()
+            .flatten(),
+        _ => None,
+    };
+    let out = banner_feed::moment_path(&dir, &name, at);
+    let part = out.with_extension("part");
+    let mut cmd = std::process::Command::new(&ffmpeg);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-framerate",
+        "30",
+        "-i",
+    ])
+    .arg(tmp.join("%04d.jpg"));
+    if let Some(c) = &clip {
+        // The clip at the same moment of the loop (24 fps clip, 30 fps loop).
+        let first = at * clips::CLIP_FPS as usize / 30 + 1;
+        cmd.args([
+            "-framerate",
+            &clips::CLIP_FPS.to_string(),
+            "-start_number",
+            &first.to_string(),
+            "-i",
+        ])
+        .arg(c.dir.join("%04d.png"))
+        .args([
+            "-filter_complex",
+            "[0:v][1:v]overlay=x=0:y=0:eof_action=pass,format=yuv420p[b]",
+            "-map",
+            "[b]",
+        ]);
+    }
+    cmd.args([
+        "-frames:v",
+        "150",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "16",
+        "-pix_fmt",
+        "yuv420p",
+        "-g",
+        "30",
+        "-bf",
+        "0",
+        "-x264-params",
+        "aud=1:repeat-headers=1",
+        "-an",
+        "-f",
+        "h264",
+    ])
+    .arg(&part);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let o = cmd.output().map_err(|e| e.to_string())?;
+    std::fs::remove_dir_all(&tmp).ok();
+    if !o.status.success() {
+        return Err(format!(
+            "could not make the pop-up: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ));
+    }
+    std::fs::rename(&part, &out).map_err(|e| e.to_string())
+}
+
+/// "Show now" for a banner pop-up (plays within 5 s).
+#[tauri::command(async)]
+fn show_banner_moment(name: String) -> Result<(), String> {
+    banner_feed::show_moment(&name)
+}
+
+/// Automatic pop-ups: on/off, how often, which ones.
+#[tauri::command(async)]
+fn set_banner_moments(auto: bool, every: u64, names: Vec<String>) {
+    banner_feed::set_auto(auto, every, names);
 }
 
 /// Banner on (true) or the plain strip (false), live: no restart.
@@ -827,6 +963,9 @@ fn main() {
                 )
             })?;
             let ai = ai::Ai::new(app.handle().clone(), core.mixer.clone());
+            if test_control::enabled() {
+                test_control::spawn(app.handle().clone(), core.clone());
+            }
             app.manage(core);
             app.manage(Install::default());
             app.manage(ai);
@@ -883,6 +1022,9 @@ fn main() {
             set_game_mode,
             set_privacy_cover,
             save_banner_plain,
+            save_banner_moment,
+            show_banner_moment,
+            set_banner_moments,
             set_banner_on,
             save_banner,
             get_banner_asset,
